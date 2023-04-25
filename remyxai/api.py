@@ -28,7 +28,7 @@ def download_model(model_name, model_format):
     response = requests.post(url, headers=HEADERS, stream=True)
     with open(f"{model_name}.zip", "wb") as out_file:
         shutil.copyfileobj(response.raw, out_file)
-    return 'The file was saved successfully'
+    return f"The file {model_name}.zip was saved successfully"
 
 # Engines
 def train_classifier(model_name, labels, model_selector):
