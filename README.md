@@ -8,7 +8,7 @@ pip install remyxai
 ```
 
 ## Token authentication
-OpenAI API requires authentication token, which can be obtained on this page: https://engine.remyx.ai/account
+Remyx AI API requires authentication token, which can be obtained on this page: https://engine.remyx.ai/account
 
 Provide api key to the CLI through an environment variable `REMYXAI_API_KEY`.
 ```
