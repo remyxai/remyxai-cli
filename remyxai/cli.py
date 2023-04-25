@@ -1,5 +1,6 @@
 from .api import *
 import argparse
+from pprint import pprint
 
 def main():
     parser = argparse.ArgumentParser(description="Model management script")
@@ -44,26 +45,26 @@ def main():
     if args.action == "model":
         if args.subaction == "list":
             models = list_models()
-            return models
+            pprint(models)
         elif args.subaction == "delete":
             deleted_model = delete_model(args.model_name)
-            return deleted_model
+            pprint(deleted_model)
         elif args.subaction == "download":
             downloaded_model = download_model(args.model_name, args.model_format)
-            return downloaded_model
+            print(downloaded_model)
         else:
             print("Invalid argument for 'model'")
     elif args.action == "classify":
         labels = args.labels.split(",")
         training_classifier = train_classifier(args.model_name, labels, args.model_size)
-        return training_classifier
+        pprint(training_classifier) 
     elif args.action == "user":
         if args.subaction == "profile":
             profile = get_user_profile()
-            return profile
+            pprint(profile)
         elif args.subaction == "credits":
             user_credits = get_user_credits()
-            return user_credits
+            pprint(user_credits)
         else:
             print("Invalid argument for 'user'")
     else:
