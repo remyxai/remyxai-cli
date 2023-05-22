@@ -18,12 +18,17 @@ def list_models():
     response = requests.get(url, headers=HEADERS)
     return response.json()
 
-def delete_model(model_name):
+def get_model_summary(model_name):
+    url = f"{BASE_URL}model/summary/{model_name}"
+    response = requests.get(url, headers=HEADERS)
+    return response.json()
+
+def delete_model(model_name: str):
     url = f"{BASE_URL}model/delete/{model_name}"
     response = requests.post(url, headers=HEADERS)
     return response.json()
 
-def download_model(model_name, model_format):
+def download_model(model_name: str, model_format: str):
     url = f"{BASE_URL}model/download/{model_name}/{model_format}"
     response = requests.post(url, headers=HEADERS, stream=True)
     with open(f"{model_name}.zip", "wb") as out_file:
@@ -31,7 +36,7 @@ def download_model(model_name, model_format):
     return f"The file {model_name}.zip was saved successfully"
 
 # Engines
-def train_classifier(model_name, labels, model_selector):
+def train_classifier(model_name: str, labels: list, model_selector: str):
     url = f"{BASE_URL}task/classify/{model_name}/{','.join(labels)}/{model_selector}"
     response = requests.post(url, headers=HEADERS)
     return response.json()
@@ -46,3 +51,4 @@ def get_user_credits():
     url = f"{BASE_URL}user/credits"
     response = requests.get(url, headers=HEADERS)
     return response.json()
+
