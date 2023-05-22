@@ -7,9 +7,16 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.1.1",
+    version="0.1.2",
     packages=find_packages(),
-    install_requires=["requests"],
+    install_requires=[
+        "numpy",
+        "onnx", 
+        "onnxruntime",
+        "pillow",
+        "requests",
+        "tqdm",
+        ],
     entry_points={
         "console_scripts": [
             "remyxai=remyxai.cli:main",
