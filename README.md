@@ -101,5 +101,19 @@ from remyxai.api import get_user_credits
 print(get_user_credits())
 ```
 
+### Utils
+*New!* Label images locally:
+* cli command:
+```
+$ remyxai utils label --labels="comma,separated,labels" --image_dir="/path/to/image/dir"
+```
 
+* python command:
+```
+from remyxai.utils import labeler
+model_name = "<your-model-name>"
+labels = ["comma", "separated", "labels"]
+image_dir = "/path/to/image/dir"
+print(labeler(labels, image_dir, model_name))
+```
 
