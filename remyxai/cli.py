@@ -16,7 +16,11 @@ def main():
     subparsers_model = model_parser.add_subparsers(dest="subaction", help="Model subactions")
 
     # Define 'list' subaction
-    list_parser = subparsers_model.add_parser("list", help="Create a new model")
+    list_parser = subparsers_model.add_parser("list", help="List your models")
+
+    # Define 'summary' subaction
+    summary_parser = subparsers_model.add_parser("summarize", help="Summarize a model")
+    summary_parser.add_argument("--model_name", required=True, help="Name of the model to provide a summary")
 
     # Define 'download' subaction
     download_parser = subparsers_model.add_parser("download", help="Download and convert a model")
@@ -59,6 +63,9 @@ def main():
         if args.subaction == "list":
             models = list_models()
             pprint(models)
+        elif args.subaction == "summarize":
+            model_summary = get_model_summary(args.model_name)
+            pprint(model_summary)
         elif args.subaction == "delete":
             deleted_model = delete_model(args.model_name)
             pprint(deleted_model)
