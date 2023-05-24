@@ -100,36 +100,20 @@ def labeler(labels: list, image_dir: str, model_name=None):
     if model_name is None:
         model_name = "labeler_{}".format("_".join(labels))
     status = get_model_summary(model_name)["message"][0]["status"]
-    if status == "ERROR":
+
+    if status == "NOT_FOUND":
         print("Model is training, please wait...")
-        training_status = train_classifier(model_name, labels, "3")
-        while True:
-            status = get_model_summary(model_name)["message"][0]["status"]
-            print(f'Current model status: {status}')
-            if status == "FINISHED":
-                break
-            elif status == "RUNNING":
-                # Check back in 5 minutes:
-                time.sleep(300)
-            elif status == "FAILED":
-                print("Model training failed. Please try again.")
-                return
-    elif status != "FINISHED" and status != "ERROR":
-        print("Model is training, please wait...")
-        while True:
-            status = get_model_summary(model_name)["message"][0]["status"]
-            print(f'Current model status: {status}')
-            if status == "FINISHED":
-                break
-            elif status == "RUNNING":
-                # Check back in 5 minutes:
-                time.sleep(300)
-            elif status == "FAILED":
-                print("Model training failed. Please try again.")
-                return
-    elif status == "FINISHED":
-        # ready to continue
-        pass
+        train_classifier(model_name, labels, "3")
+
+    while status != "FINISHED":
+        status = get_model_summary(model_name)["message"][0]["status"]
+        print(f'Current model status: {status}')
+        if status == "RUNNING":
+            # Check back in 5 minutes:
+            time.sleep(300)
+        elif status == "FAILED":
+            print("Model training failed. Please try again.")
+            return
 
     print("Model is ready for inference.")
     print("Downloading model...")
@@ -146,5 +130,4 @@ def labeler(labels: list, image_dir: str, model_name=None):
 
     # Step 3: Process images
     process_message = process_images_in_directory(image_dir, model, chunk_size=8)
-    print(process_message)
-    return "Done!"
+    return process_message
