@@ -30,6 +30,17 @@ from remyxai.api import list_models
 print(list_models())
 ```
 
+Get the summary of a model:
+* cli command:
+```bash
+$ remyxai model summarize --model_name=<your-model-name>
+```
+* python command:
+```python
+from remyxai.api import get_model_summary
+print(get_model_summary(model_name))
+```
+
 Delete a model by name:
 * cli command:
 ```bash
@@ -104,12 +115,12 @@ print(get_user_credits())
 ### Utils
 *New!* Label images locally:
 * cli command:
-```
+```bash
 $ remyxai utils label --labels="comma,separated,labels" --image_dir="/path/to/image/dir"
 ```
 
 * python command:
-```
+```python
 from remyxai.utils import labeler
 model_name = "<your-model-name>"
 labels = ["comma", "separated", "labels"]
