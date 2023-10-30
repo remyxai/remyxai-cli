@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import time
+import base64
 import zipfile
 from tqdm import tqdm
 
@@ -23,6 +24,10 @@ def load_image(image_path, img_height=224, img_width=224):
     img = np.asarray(img, dtype='float32') / 255
     # Return a scaled array between -1 and 1
     return img * 2 - 1
+
+def image_to_base64_string(img_path):
+    with open(img_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
 
 class RemyxModel(object):
     def __init__(self, model_assets_path):

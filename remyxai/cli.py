@@ -37,6 +37,16 @@ def main():
     classify_parser.add_argument("--labels", required=True, help="Comma separated list of labels, e.g. 'cat,dog'")
     classify_parser.add_argument("--model_size", required=True, help="Integer value for model size from 1=small up to 5=large")
 
+    # Define 'detect' action
+    detect_parser = subparsers_action.add_parser("detect", help="Detector-related actions")
+    detect_parser.add_argument("--model_name", required=True, help="Name of the model")
+    detect_parser.add_argument("--labels", required=True, help="Comma separated list of labels, e.g. 'cat,dog'")
+    detect_parser.add_argument("--model_size", required=True, help="Integer value for model size from 1=small up to 5=large")
+
+    # Define 'image_analyze' action
+    image_analyze_parser = subparsers_action.add_parser("image_analyze", help="Image analyzer-related actions")
+    image_analyze_parser.add_argument("--image_path", required=True, help="Path to image")
+
     # Define 'user' action
     user_parser = subparsers_action.add_parser("user", help="User-related actions")
 
@@ -74,11 +84,23 @@ def main():
             print(downloaded_model)
         else:
             print("Invalid argument for 'model'")
+
     elif args.action == "classify":
         labels = args.labels.split(",")
         labels = [x.strip() for x in labels]
         training_classifier = train_classifier(args.model_name, labels, args.model_size)
         pprint(training_classifier) 
+
+    elif args.action == "detect":
+        labels = args.labels.split(",")
+        labels = [x.strip() for x in labels]
+        training_detector = train_detector(args.model_name, labels, args.model_size)
+        pprint(training_detector) 
+
+    elif args.action == "image_analyze":
+        image_analysis = image_analyze(args.image_path)
+        pprint(image_analysis)
+
     elif args.action == "user":
         if args.subaction == "profile":
             profile = get_user_profile()
@@ -88,6 +110,7 @@ def main():
             pprint(user_credits)
         else:
             print("Invalid argument for 'user'")
+
     elif args.action == "utils":
         if args.subaction == "label":
             labels = args.labels.split(",")

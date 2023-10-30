@@ -1,6 +1,8 @@
 import os
+import json
 import shutil
 import requests
+from .utils import image_to_base64_string
 
 REMYXAI_API_KEY = os.environ.get("REMYXAI_API_KEY")
 if not REMYXAI_API_KEY:
@@ -44,6 +46,17 @@ def train_classifier(model_name: str, labels: list, model_selector: str):
 def train_detector(model_name: str, labels: list, model_selector: str):
     url = f"{BASE_URL}task/detect/{model_name}/{','.join(labels)}/{model_selector}"
     response = requests.post(url, headers=HEADERS)
+    return response.json()
+
+def image_analyze(image_path: str):
+    url = f"{BASE_URL}task/image_analyze"
+    headers = HEADERS.copy()
+    headers["Content-Type"] = "application/json"
+    data = {
+            "image_data": image_to_base64_string(image_path),
+            "prompt": "describe this image"
+            }
+    response = requests.post(url, headers=headers, data=json.dumps(data), timeout=300)
     return response.json()
 
 # User
