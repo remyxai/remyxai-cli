@@ -16,7 +16,7 @@ export REMYXAI_API_KEY=<your-key-here>
 ```
 
 ## Usage
-Currently, the classify engine API is supported. Additional functionality for model management and user data is available.
+Quickly get started with the following examples:
 
 ### Model
 List all models:
