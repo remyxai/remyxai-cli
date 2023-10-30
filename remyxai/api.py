@@ -36,13 +36,22 @@ def download_model(model_name: str, model_format: str):
     return f"The file {model_name}.zip was saved successfully"
 
 # Engines
-def train_classifier(model_name: str, labels: list, model_selector: str):
+def train_classifier(model_name: str, labels: list, model_selector: str, hf_dataset=None):
     url = f"{BASE_URL}task/classify/{model_name}/{','.join(labels)}/{model_selector}"
+    if hf_dataset:
+         params = {"hf_dataset": hf_dataset}
+         response = requests.post(url, headers=HEADERS, params=params)
+         return response.json()
+
     response = requests.post(url, headers=HEADERS)
     return response.json()
 
-def train_detector(model_name: str, labels: list, model_selector: str):
+def train_detector(model_name: str, labels: list, model_selector: str, hf_dataset=None):
     url = f"{BASE_URL}task/detect/{model_name}/{','.join(labels)}/{model_selector}"
+    if hf_dataset:
+         params = {"hf_dataset": hf_dataset}
+         response = requests.post(url, headers=HEADERS, params=params)
+         return response.json()
     response = requests.post(url, headers=HEADERS)
     return response.json()
 

@@ -16,7 +16,7 @@ export REMYXAI_API_KEY=<your-key-here>
 ```
 
 ## Usage
-Currently, the classify engine API is supported. Additional functionality for model management and user data is available.
+Quickly get started with the following examples:
 
 ### Model
 List all models:
@@ -75,14 +75,42 @@ Train an image classifier:
 ```bash
 $ remyxai classify --model_name=<your-model-name> --labels="comma,separated,labels" --model_size=<int between 1-5>
 ```
+
+add the optional `--hf_dataset` if you want to train with your own image dataset on 🤗. [See the docs](https://huggingface.co/docs/datasets/v2.14.5/image_dataset#imagefolder) for more details
+
 * python command:
 ```python
 from remyxai.api import train_classifier
 
 model_name = "<your-model-name>"
 labels = ["comma", "separated", "labels"]
-model_size = 1
-print(train_classifier(model_name, labels, model_size))
+model_size = 3 # use 1 for microcontrollers
+
+# Optional HF dataset
+hf_dataset = "your/hf-dataset"
+
+print(train_classifier(model_name, labels, model_size, hf_dataset))
+```
+
+Train an object detector:
+* cli command:
+```bash
+$ remyxai detect --model_name=<your-model-name> --labels="comma,separated,labels" --model_size=<int between 1-5>
+```
+
+add the optional `--hf_dataset` if you want to train with your own image dataset on 🤗. [See the docs](https://huggingface.co/docs/datasets/v2.14.5/image_dataset#object-detection) for more details
+
+* python command:
+```python
+from remyxai.api import train_detector
+
+model_name = "<your-model-name>"
+labels = ["comma", "separated", "labels"]
+model_size = 3
+
+# Optional HF dataset
+hf_dataset = "your/hf-dataset"
+print(train_detector(model_name, labels, model_size, hf_dataset))
 ```
 
 ### User
