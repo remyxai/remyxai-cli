@@ -113,6 +113,24 @@ hf_dataset = "your/hf-dataset"
 print(train_detector(model_name, labels, model_size, hf_dataset))
 ```
 
+*New!* Train a text generator:
+* cli command:
+```bash
+$ remyxai generate --model_name=<your-model-name> --hf_dataset=<your/hf-dataset>
+```
+
+Your Huggingface dataset should have a column named 'text' following the string format: `"### Human: <prompt> ### Assistant: <response>"`.
+
+* python command:
+```python
+from remyxai.api import train_generator
+
+model_name = "<your-model-name>"
+hf_dataset = "your/hf-dataset"
+
+print(train_generator(model_name, hf_dataset))
+```
+
 ### User
 
 Get user profile info:
@@ -141,7 +159,7 @@ print(get_user_credits())
 ```
 
 ### Utils
-*New!* Label images locally:
+Label images locally:
 * cli command:
 ```bash
 $ remyxai utils label --labels="comma,separated,labels" --image_dir="/path/to/image/dir"
