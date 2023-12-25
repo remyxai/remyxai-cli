@@ -28,12 +28,27 @@ def delete_model(model_name: str):
     response = requests.post(url, headers=HEADERS)
     return response.json()
 
+
 def download_model(model_name: str, model_format: str):
     url = f"{BASE_URL}model/download/{model_name}/{model_format}"
     response = requests.post(url, headers=HEADERS, stream=True)
-    with open(f"{model_name}.zip", "wb") as out_file:
-        shutil.copyfileobj(response.raw, out_file)
-    return f"The file {model_name}.zip was saved successfully"
+
+    if response.status_code == 200:
+        # Extract filename from Content-Disposition header if available
+        content_disposition = response.headers.get('content-disposition')
+        if content_disposition:
+            filename = content_disposition.split('filename=')[1]
+            filename = filename.strip("\"'")
+        else:
+            # Fallback to default naming convention
+            filename = f"{model_name}.zip"
+
+        with open(filename, "wb") as out_file:
+            shutil.copyfileobj(response.raw, out_file)
+        return f"The file {filename} was saved successfully"
+    else:
+        return f"Failed to download the model. Status Code: {response.status_code}"
+
 
 # Engines
 def train_classifier(model_name: str, labels: list, model_selector: str, hf_dataset=None):
@@ -53,6 +68,12 @@ def train_detector(model_name: str, labels: list, model_selector: str, hf_datase
          response = requests.post(url, headers=HEADERS, params=params)
          return response.json()
     response = requests.post(url, headers=HEADERS)
+    return response.json()
+
+def train_generator(model_name: str, hf_dataset: str):
+    url = f"{BASE_URL}task/generate/{model_name}"
+    params = {"hf_dataset": hf_dataset}
+    response = requests.post(url, headers=HEADERS, params=params)
     return response.json()
 
 # User
