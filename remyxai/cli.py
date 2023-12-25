@@ -45,6 +45,11 @@ def main():
     detect_parser.add_argument("--model_size", required=True, help="Integer value for model size from 1=small up to 5=large")
     detect_parser.add_argument("--hf_dataset", required=False, default=None, help="(Optional) Name of the HuggingFace dataset to use for training")
 
+    # Define 'generate' action
+    generate_parser = subparsers_action.add_parser("generate", help="Generator-related actions")
+    generate_parser.add_argument("--model_name", required=True, help="Name of the model")
+    generate_parser.add_argument("--hf_dataset", required=True, default=None, help="Name of the HuggingFace dataset to use for training")
+
     # Define 'user' action
     user_parser = subparsers_action.add_parser("user", help="User-related actions")
 
@@ -94,6 +99,10 @@ def main():
         labels = [x.strip() for x in labels]
         training_detector = train_detector(args.model_name, labels, args.model_size, args.hf_dataset)
         pprint(training_detector)
+
+    elif args.action == "generate":                                                                            
+        training_generator = train_generator(args.model_name, args.hf_dataset)
+        pprint(training_generator)
 
     elif args.action == "user":
         if args.subaction == "profile":
