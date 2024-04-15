@@ -113,13 +113,17 @@ hf_dataset = "your/hf-dataset"
 print(train_detector(model_name, labels, model_size, hf_dataset))
 ```
 
-*New!* Train a text generator:
+Train a text generator:
 * cli command:
 ```bash
 $ remyxai generate --model_name=<your-model-name> --hf_dataset=<your/hf-dataset>
 ```
 
-Your Huggingface dataset should have a column named 'text' following the string format: `"### Human: <prompt> ### Assistant: <response>"`.
+Your Huggingface dataset should have two columns with naming conventions like:
+* "question", "response"
+* "question", "answer"
+* "input", "output"
+* "prompt", "response"
 
 * python command:
 ```python
@@ -129,6 +133,50 @@ model_name = "<your-model-name>"
 hf_dataset = "your/hf-dataset"
 
 print(train_generator(model_name, hf_dataset))
+```
+### Deploy 
+Launch a [Triton Server](https://developer.nvidia.com/triton-inference-server) containerized deployment for your model. Currently supported for `generate` models. More model types support coming soon!
+
+#### System requirements
+Please make sure you have Docker, Docker Compose, and the NVIDIA Container Toolkit are installed. 
+* [Docker installation](https://docs.docker.com/engine/install/ubuntu/)
+* [Docker Compose installation](https://docs.docker.com/compose/install/linux/)
+* [NVIDIA Container Toolkit installation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+
+Deploy a model with:
+* cli command:
+```bash
+# Bring up
+remyxai deploy --model_name="<your-model-name>"
+
+# Bring down
+remyxai deploy down --model_name="<your-model-name>"
+```
+
+* python command:
+```python
+from remyxai.api import deploy_model
+
+model_name = "<your-model-name>"
+
+deploy_model(model_name, action='up') # action can be "up" or "down"
+```
+
+And you can run inference with:
+* cli command:
+```bash
+remyxai infer --model_name="<your-model-name>" --prompt="Your prompt here"
+```
+
+* python command:
+```python
+from remyxai.api import run_inference
+
+model_name = "<your-model-name>"
+prompt="Your prompt here"
+
+result, time_elapsed = run_inference(model_name, prompt, server_url="localhost:8000", model_version="1")
+print(result)
 ```
 
 ### User
