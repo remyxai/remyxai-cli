@@ -1,6 +1,11 @@
 import os
+import time
 import shutil
 import requests
+import tempfile
+import subprocess
+import numpy as np
+from tritonclient.http import InferenceServerClient, InferInput, InferRequestedOutput
 
 REMYXAI_API_KEY = os.environ.get("REMYXAI_API_KEY")
 if not REMYXAI_API_KEY:
@@ -75,6 +80,94 @@ def train_generator(model_name: str, hf_dataset: str):
     params = {"hf_dataset": hf_dataset}
     response = requests.post(url, headers=HEADERS, params=params)
     return response.json()
+
+# Deployments
+def download_deployment_package(model_name, output_path):
+    """Download the deployment package for a specified model."""
+    url = f"{BASE_URL}deployment/download/{model_name}"
+    response = requests.get(url, headers=HEADERS, stream=True)
+    if response.status_code == 200:
+        with open(output_path, 'wb') as f:
+            shutil.copyfileobj(response.raw, f)
+        print(f"Deployment package downloaded successfully: {output_path}")
+        return response  # Return response for further processing if needed
+    else:
+        print(f"Failed to download deployment package: {response.status_code}")
+        print(response.json())  # Assuming the error message is in JSON format
+        return None
+
+def deploy_model(model_name, action='up'):
+    """Deploy or tear down a model using Docker Compose based on the action."""
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        model_dir = os.path.join(tmpdirname, model_name)  # This is where we expect to build the Docker image.
+        compose_file_path = os.path.join(model_dir, 'docker-compose.yml')
+        zip_path = os.path.join(tmpdirname, f"{model_name}_deployment_package.zip")
+
+        if action == 'up':
+            if download_deployment_package(model_name, zip_path):
+                # Unzip the package directly into the model_dir to ensure the structure is correct
+                os.makedirs(model_dir, exist_ok=True)  # Make sure the target directory exists
+                subprocess.run(['unzip', '-o', zip_path, '-d', model_dir], check=True)
+
+                # Check the contents just to verify
+                print("Unzipped files:", os.listdir(model_dir))  # For debugging
+
+                # Generate Docker Compose YAML if it does not exist
+                if not os.path.exists(compose_file_path):
+                    with open(compose_file_path, 'w') as f:
+                        f.write(f"""
+version: '3.8'
+services:
+  tritonserver:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    image: {model_name}:latest
+    container_name: {model_name}_triton_server
+    runtime: nvidia
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    shm_size: 24G
+    restart: unless-stopped
+                        """)
+
+                # Deploy using Docker Compose
+                os.chdir(model_dir)  # Change to the directory where the Dockerfile and docker-compose.yml are
+                subprocess.run(['docker', 'compose', 'up', '--build', '-d'], check=True)
+                print("Deployment successful")
+        elif action == 'down':
+            if os.path.exists(compose_file_path):
+                os.chdir(model_dir)  # Ensure commands run in the correct directory
+                subprocess.run(['docker', 'compose', 'down'], check=True)
+                print("Service has been successfully taken down.")
+            else:
+                print("Error: Deployment not found.")
+
+# Infer
+def run_inference(model_name, prompt, server_url="localhost:8000", model_version="1"):
+    triton_client = InferenceServerClient(url=server_url, verbose=False)
+
+    # Convert the prompt to bytes and wrap in a numpy array
+    prompt_np = np.array([prompt.encode('utf-8')], dtype=object)
+
+    # Create input for PROMPT.
+    prompt_in = InferInput(name="PROMPT", shape=[1], datatype="BYTES")
+    prompt_in.set_data_from_numpy(prompt_np, binary_data=True)
+
+    results_out = InferRequestedOutput(name="RESULTS", binary_data=False)
+
+    start_time = time.time()
+    response = triton_client.infer(model_name=model_name,
+                                   model_version=model_version,
+                                   inputs=[prompt_in],
+                                   outputs=[results_out])
+
+    elapsed_time = time.time() - start_time
+    results = response.get_response()["outputs"][0]["data"][0]
+    return results, elapsed_time
+
 
 # User
 def get_user_profile():
