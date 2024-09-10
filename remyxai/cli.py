@@ -1,10 +1,12 @@
-from .api import *
-from .utils import labeler
+
+
 import argparse
 import time
 import logging
 import subprocess
 import json
+import sys
+from actions import *
 
 def main():
     parser = argparse.ArgumentParser(description="Model management script")
@@ -70,67 +72,26 @@ def main():
 
     args = parser.parse_args()
 
-    if args.action == "model":
-        if args.subaction == "list":
-            models = list_models()
-            logging.info(json.dumps(models, indent=2))    
-        elif args.subaction == "summarize":
-            model_summary = get_model_summary(args.model_name)
-            logging.info(json.dumps(model_summary, indent=2))
-        elif args.subaction == "delete":
-            deleted_model = delete_model(args.model_name)
-            logging.info(json.dumps(deleted_model, indent=2))
-        elif args.subaction == "download":
-            downloaded_model = download_model(args.model_name, args.model_format)
-            logging.info(json.dumps(downloaded_model, indent=2))
+    try:
+        if args.action == "model":
+            handle_model_action(args)
+        elif args.action in ["classify", "detect", "generate"]:
+            handle_training_action(args)
+        elif args.action == "deploy":
+            deploy_model(args.model_name, args.command)
+        elif args.action == "infer":
+            handle_inference(args)
+        elif args.action == "user":
+            handle_user_action(args)
+        elif args.action == "utils":
+            handle_utils_action(args)
         else:
-            logging.info("Invalid argument for 'model'")
+            raise ValueError(f"Invalid action: {args.action}")
+    except Exception as e:
+        logging.error(f"An error occurred: {str(e)}")
+        sys.exit(1)
 
-    elif args.action == "classify":
-        labels = args.labels.split(",")
-        labels = [x.strip() for x in labels]
-        training_classifier = train_classifier(args.model_name, labels, args.model_size, args.hf_dataset)
-        logging.info(json.dumps(training_classifier, indent=2))
 
-    elif args.action == "detect":                                                                            
-        labels = args.labels.split(",")
-        labels = [x.strip() for x in labels]
-        training_detector = train_detector(args.model_name, labels, args.model_size, args.hf_dataset)
-        logging.info(json.dumps(training_detector, indent=2))
-
-    elif args.action == "generate":                                                                            
-        training_generator = train_generator(args.model_name, args.hf_dataset)
-        logging.info(json.dumps(training_generator, indent=2))
-
-    elif args.action == "deploy":
-        deploy_model(args.model_name, args.command)
-
-    elif args.action == "infer":
-        result, time_elapsed = run_inference(args.model_name, args.prompt, args.server_url, args.model_version)
-        logging.info(f"Inference time: {time_elapsed:.4f} seconds")
-        logging.info(json.dumps(result, indent=2))
-
-    elif args.action == "user":
-        if args.subaction == "profile":
-            profile = get_user_profile()
-            logging.info(profile)
-        elif args.subaction == "credits":
-            user_credits = get_user_credits()
-            logging.info(json.dumps(user_credits, indent=2))
-        else:
-            logging.info("Invalid argument for 'user'")
-
-    elif args.action == "utils":
-        if args.subaction == "label":
-            labels = args.labels.split(",")
-            labels = [x.strip() for x in labels]
-            results = labeler(labels, args.image_dir, args.model_name)
-            logging.info(results)
-        else:
-            logging.info("Invalid argument for 'utils'")
-
-    else:
-        logging.info("Invalid action")
 
 if __name__ == "__main__":
     main()
