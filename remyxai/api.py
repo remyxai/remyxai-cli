@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import numpy as np
 from tritonclient.http import InferenceServerClient, InferInput, InferRequestedOutput
+import logging
 
 REMYXAI_API_KEY = os.environ.get("REMYXAI_API_KEY")
 if not REMYXAI_API_KEY:
@@ -89,11 +90,11 @@ def download_deployment_package(model_name, output_path):
     if response.status_code == 200:
         with open(output_path, 'wb') as f:
             shutil.copyfileobj(response.raw, f)
-        print(f"Deployment package downloaded successfully: {output_path}")
+        logging.info(f"Deployment package downloaded successfully: {output_path}")
         return response  # Return response for further processing if needed
     else:
-        print(f"Failed to download deployment package: {response.status_code}")
-        print(response.json())  # Assuming the error message is in JSON format
+        logging.info(f"Failed to download deployment package: {response.status_code}")
+        logging.info(f"Response: {response.json()}")  # Assuming the error message is in JSON format
         return None
 
 def deploy_model(model_name, action='up'):
@@ -110,7 +111,7 @@ def deploy_model(model_name, action='up'):
                 subprocess.run(['unzip', '-o', zip_path, '-d', model_dir], check=True)
 
                 # Check the contents just to verify
-                print("Unzipped files:", os.listdir(model_dir))  # For debugging
+                logging.info("Unzipped files:", os.listdir(model_dir))  # For debugging
 
                 # Generate Docker Compose YAML if it does not exist
                 if not os.path.exists(compose_file_path):
@@ -136,14 +137,14 @@ services:
                 # Deploy using Docker Compose
                 os.chdir(model_dir)  # Change to the directory where the Dockerfile and docker-compose.yml are
                 subprocess.run(['docker', 'compose', 'up', '--build', '-d'], check=True)
-                print("Deployment successful")
+                logging.info("Deployment successful")
         elif action == 'down':
             if os.path.exists(compose_file_path):
                 os.chdir(model_dir)  # Ensure commands run in the correct directory
                 subprocess.run(['docker', 'compose', 'down'], check=True)
-                print("Service has been successfully taken down.")
+                logging.info("Service has been successfully taken down.")
             else:
-                print("Error: Deployment not found.")
+                logging.info("Error: Deployment not found.")
 
 # Infer
 def run_inference(model_name, prompt, server_url="localhost:8000", model_version="1"):
