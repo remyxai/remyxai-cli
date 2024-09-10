@@ -13,6 +13,7 @@ from PIL import Image
 from ast import literal_eval
 
 from .api import *
+import logging
 
 # Utilities
 
@@ -86,7 +87,7 @@ def process_images_in_directory(directory, processor, chunk_size=10):
         with open('processed_results.json', 'w') as json_file:
             json.dump(results, json_file)
             
-        print(f"Processed {min(i+chunk_size, len(image_files))} out of {len(image_files)} images")
+        logging.info(f"Processed {min(i+chunk_size, len(image_files))} out of {len(image_files)} images")
         
     return 'Results are stored in ./processed_results.json'
 
@@ -102,25 +103,25 @@ def labeler(labels: list, image_dir: str, model_name=None):
     status = get_model_summary(model_name)["message"][0]["status"]
 
     if status == "NOT_FOUND":
-        print("Model is training, please wait...")
+        logging.info("Model is training, please wait...")
         train_classifier(model_name, labels, "3")
 
     while status != "FINISHED":
         status = get_model_summary(model_name)["message"][0]["status"]
-        print(f'Current model status: {status}')
+        logging.info(f'Current model status: {status}')
         if status == "RUNNING":
             # Check back in 5 minutes:
             time.sleep(300)
         elif status == "FAILED":
-            print("Model training failed. Please try again.")
+            logging.info("Model training failed. Please try again.")
             return
 
-    print("Model is ready for inference.")
-    print("Downloading model...")
+    logging.info("Model is ready for inference.")
+    logging.info("Downloading model...")
     download_message = download_model(model_name=model_name, model_format="onnx")
 
-    print(download_message)
-    print("Preparing for inference...")                                                                                                                                                                     
+    logging.info(download_message)
+    logging.info("Preparing for inference...")                                                                                                                                                                     
     # Step 2: Decompress model assets, load onnx model  
     model_assets_path = os.path.join(os.getcwd(), model_name)
     model_assets_zip = model_assets_path + ".zip"
