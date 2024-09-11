@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import numpy as np
 from tritonclient.http import InferenceServerClient, InferInput, InferRequestedOutput
+import logging
 
 REMYXAI_API_KEY = os.environ.get("REMYXAI_API_KEY")
 if not REMYXAI_API_KEY:
@@ -89,11 +90,11 @@ def download_deployment_package(model_name, output_path):
     if response.status_code == 200:
         with open(output_path, 'wb') as f:
             shutil.copyfileobj(response.raw, f)
-        print(f"Deployment package downloaded successfully: {output_path}")
-        return response  # Return response for further processing if needed
+        logging.info(f"Deployment package downloaded successfully: {output_path}")
+        return response
     else:
-        print(f"Failed to download deployment package: {response.status_code}")
-        print(response.json())  # Assuming the error message is in JSON format
+        logging.info(f"Failed to download deployment package: {response.status_code}")
+        logging.info(f"Response: {response.json()}")
         return None
 
 def deploy_model(model_name, action='up'):
