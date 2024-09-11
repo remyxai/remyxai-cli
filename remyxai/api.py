@@ -98,52 +98,51 @@ def download_deployment_package(model_name, output_path):
 
 def deploy_model(model_name, action='up'):
     """Deploy or tear down a model using Docker Compose based on the action."""
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        model_dir = os.path.join(tmpdirname, model_name)  # This is where we expect to build the Docker image.
-        compose_file_path = os.path.join(model_dir, 'docker-compose.yml')
-        zip_path = os.path.join(tmpdirname, f"{model_name}_deployment_package.zip")
+    model_dir = os.path.join('/tmp', model_name)
+    compose_file_path = os.path.join(model_dir, 'docker-compose.yml')
+    zip_path = os.path.join("/tmp", f"{model_name}_deployment_package.zip")
 
-        if action == 'up':
-            if download_deployment_package(model_name, zip_path):
-                # Unzip the package directly into the model_dir to ensure the structure is correct
-                os.makedirs(model_dir, exist_ok=True)  # Make sure the target directory exists
-                subprocess.run(['unzip', '-o', zip_path, '-d', model_dir], check=True)
+    if action == 'up':
+        if download_deployment_package(model_name, zip_path):
+            # Unzip the package directly into the model_dir to ensure the structure is correct
+            os.makedirs(model_dir, exist_ok=True)  # Make sure the target directory exists
+            subprocess.run(['unzip', '-o', zip_path, '-d', model_dir], check=True)
 
-                # Check the contents just to verify
-                print("Unzipped files:", os.listdir(model_dir))  # For debugging
+            # Check the contents just to verify
+            print("Unzipped files:", os.listdir(model_dir))  # For debugging
 
-                # Generate Docker Compose YAML if it does not exist
-                if not os.path.exists(compose_file_path):
-                    with open(compose_file_path, 'w') as f:
-                        f.write(f"""
+            # Generate Docker Compose YAML if it does not exist
+            if not os.path.exists(compose_file_path):
+                with open(compose_file_path, 'w') as f:
+                    f.write(f"""
 version: '3.8'
 services:
-  tritonserver:
-    build:
-      context: ./
-      dockerfile: Dockerfile
-    image: {model_name}:latest
-    container_name: {model_name}_triton_server
-    runtime: nvidia
-    ports:
-      - "8000:8000"
-      - "8001:8001"
-      - "8002:8002"
-    shm_size: 24G
-    restart: unless-stopped
-                        """)
+tritonserver:
+build:
+  context: ./
+  dockerfile: Dockerfile
+image: {model_name}:latest
+container_name: {model_name}_triton_server
+runtime: nvidia
+ports:
+  - "8000:8000"
+  - "8001:8001"
+  - "8002:8002"
+shm_size: 24G
+restart: unless-stopped
+                    """)
 
-                # Deploy using Docker Compose
-                os.chdir(model_dir)  # Change to the directory where the Dockerfile and docker-compose.yml are
-                subprocess.run(['docker', 'compose', 'up', '--build', '-d'], check=True)
-                print("Deployment successful")
-        elif action == 'down':
-            if os.path.exists(compose_file_path):
-                os.chdir(model_dir)  # Ensure commands run in the correct directory
-                subprocess.run(['docker', 'compose', 'down'], check=True)
-                print("Service has been successfully taken down.")
-            else:
-                print("Error: Deployment not found.")
+            # Deploy using Docker Compose
+            os.chdir(model_dir)  # Change to the directory where the Dockerfile and docker-compose.yml are
+            subprocess.run(['docker', 'compose', 'up', '--build', '-d'], check=True)
+            print("Deployment successful")
+    elif action == 'down':
+        if os.path.exists(compose_file_path):
+            os.chdir(model_dir)  # Ensure commands run in the correct directory
+            subprocess.run(['docker', 'compose', 'down'], check=True)
+            print("Service has been successfully taken down.")
+        else:
+            print("Error: Deployment not found.")
 
 # Infer
 def run_inference(model_name, prompt, server_url="localhost:8000", model_version="1"):
