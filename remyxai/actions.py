@@ -1,5 +1,6 @@
 from .api import *
 import json
+import logging
 from .utils import labeler
 
 def handle_model_action(args):
@@ -46,3 +47,18 @@ def handle_utils_action(args):
         logging.info(results)
     else:
         logging.info(f"Invalid subaction for 'utils': {args.subaction}")
+
+def handle_myxmatch_action(args):
+    if args.action == "list":
+        result = list_myxboards()
+    elif args.action == "summarize":
+        if not args.match_name:
+            raise ValueError("--match_name is required for summarize action")
+        result = get_myxboard_summary(args.match_name)
+    elif args.action == "delete":
+        if not args.myxboard_name:
+            raise ValueError("--myxboard_name is required for delete action")
+        result = delete_myxboard(args.myxboard_name)
+    else:
+        raise ValueError(f"Invalid action for 'myxmatch': {args.action}")
+    logging.info(json.dumps(result, indent=2))

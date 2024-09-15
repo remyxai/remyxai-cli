@@ -1,5 +1,3 @@
-
-
 import argparse
 import time
 import logging
@@ -70,6 +68,11 @@ def main():
     labeler_parser.add_argument("--image_dir", required=True, help="Directory of images in '.jpg', '.jpeg', '.png' format")
     labeler_parser.add_argument("--model_name", default=None, help="Name of the model")
 
+    myxmatch_parser = subparsers_action.add_parser("myxmatch", help="MyxMatch-related actions")
+    myxmatch_parser.add_argument("action", choices=["list", "summarize", "delete"], help="Action to perform on MyxMatch")
+    myxmatch_parser.add_argument("--match_name", help="Name of the match (required for summarize)")
+    myxmatch_parser.add_argument("--myxboard_name", help="Name of the MyxBoard (required for delete)")
+
     args = parser.parse_args()
 
     try:
@@ -85,6 +88,8 @@ def main():
             handle_user_action(args)
         elif args.action == "utils":
             handle_utils_action(args)
+        elif args.action == "myxmatch":
+            handle_myxmatch_action(args)
         else:
             raise ValueError(f"Invalid action: {args.action}")
     except Exception as e:

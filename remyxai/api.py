@@ -18,6 +18,31 @@ HEADERS = {
     "authorization": f"Bearer {REMYXAI_API_KEY}",
 }
 
+def list_myxboards():
+    url = f"{BASE_URL}myxmatch/list"
+    response = requests.get(url, headers=HEADERS)
+    return response.json()
+
+def get_myxboard_summary(match_name):
+    url = f"{BASE_URL}myxmatch/summary/{match_name}"
+    response = requests.get(url, headers=HEADERS)
+    return response.json()
+
+def delete_myxboard(myxboard_name):
+    url = f"{BASE_URL}myxmatch/delete/{myxboard_name}"
+    response = requests.post(url, headers=HEADERS)
+    return response.json()
+
+def create_myxboard(match_name, prompt, model_list):
+    url = f"{BASE_URL}myxmatch/create"
+    data = {
+        "match_name": match_name,
+        "prompt": prompt,
+        "model_list": model_list
+    }
+    response = requests.post(url, headers=HEADERS, json=data)
+    return response.json()
+
 # Models
 def list_models():
     url = f"{BASE_URL}model/list"
