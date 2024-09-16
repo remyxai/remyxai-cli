@@ -1,28 +1,35 @@
 from setuptools import setup, find_packages
-
-# read the contents of your README file
 from pathlib import Path
+
 this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.1.6",
-    packages=find_packages(),
+    version="0.1.7",
+    packages=find_packages(include=["remyxai", "remyxai.*"]),
     install_requires=[
         "numpy",
-        "onnx", 
+        "onnx",
         "onnxruntime",
         "pillow",
         "requests",
         "tqdm",
         "tritonclient",
-        ],
+        "huggingface_hub",
+    ],
     entry_points={
         "console_scripts": [
-            "remyxai=remyxai.cli:main",
+            "remyxai=remyxai.cli.commands:cli",  # Adjusted to point to the `cli` command group
         ],
     },
     long_description=long_description,
-    long_description_content_type='text/markdown'
+    long_description_content_type='text/markdown',
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
+    python_requires=">=3.6",  # Specify the minimum Python version requirement
 )
+
