@@ -1,7 +1,6 @@
 import os
 import logging
 
-# Common variables for API interaction
 REMYXAI_API_KEY = os.getenv("REMYXAI_API_KEY")
 if not REMYXAI_API_KEY:
     raise ValueError("REMYXAI_API_KEY not found in environment variables. Please set it with your API key.")
