@@ -1,5 +1,6 @@
-from client.remyx_client import RemyxAPI
-from api.evaluations import MyxBoard, EvaluationTask
+from remyxai.client.remyx_client import RemyxAPI
+from remyxai.client.myxboard import MyxBoard
+from remyxai.api.evaluations import EvaluationTask
 
 def handle_model_action(args):
     """
@@ -75,4 +76,3 @@ def handle_task_mapping(task_name):
         return EvaluationTask[task_name.upper()]
     except KeyError:
         raise ValueError(f"Invalid task name: {task_name}")
-

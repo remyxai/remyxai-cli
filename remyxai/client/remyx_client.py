@@ -1,18 +1,22 @@
 import logging
-from api.evaluations import evaluate_task, MyxBoard, EvaluationTask
-from api.models import list_models, get_model_summary, delete_model, download_model
-from api.engines import train_classifier, train_detector, train_generator
-from api.deployment import deploy_model, download_deployment_package
-from api.inference import run_inference
-from api.user import get_user_profile, get_user_credits
+from typing import List
+from remyxai.api.evaluations import evaluate_myxboard, EvaluationTask
+from remyxai.api.models import list_models, get_model_summary, delete_model, download_model
+from remyxai.api.tasks import train_classifier, train_detector, train_generator
+from remyxai.api.deployment import deploy_model, download_deployment_package
+from remyxai.api.inference import run_inference
+from remyxai.api.user import get_user_profile, get_user_credits
+
+from remyxai.client.myxboard import MyxBoard
 
 class RemyxAPI:
-    def evaluate(self, myx_board: MyxBoard, tasks: list[EvaluationTask]) -> None:
+    def evaluate(self, myx_board: MyxBoard, tasks: List[EvaluationTask], prompt: Optional[str] = None) -> None:
         """Run evaluations for a MyxBoard on specific tasks."""
         try:
-            for task in tasks:
-                evaluate_task(myx_board, task)  # Use the imported function
-            logging.info(f"Evaluation completed for tasks: {tasks}")
+            # Ensure a prompt is provided when MYXMATCH is included in the tasks
+            task_list = [task.value for task in tasks]
+            evaluate_myxboard(myx_board, task_list, prompt)
+            logging.info(f"Evaluation submitted for tasks: {task_list}")
         except Exception as e:
             logging.error(f"Error during evaluation: {e}")
             raise
@@ -96,7 +100,7 @@ class RemyxAPI:
         try:
             return get_user_profile()
         except Exception as e:
-            logging.error("Error retrieving user profile: {e}")
+            logging.error(f"Error retrieving user profile: {e}")
             raise
 
     def get_user_credits(self):
@@ -104,6 +108,5 @@ class RemyxAPI:
         try:
             return get_user_credits()
         except Exception as e:
-            logging.error("Error retrieving user credits: {e}")
+            logging.error(f"Error retrieving user credits: {e}")
             raise
-

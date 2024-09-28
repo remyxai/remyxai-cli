@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 from ast import literal_eval
 import onnxruntime as ort
-from .api import get_model_summary, train_classifier, download_model
+from remyxai.api import get_model_summary, train_classifier, download_model
 
 # Utilities
 

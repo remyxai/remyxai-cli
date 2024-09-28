@@ -1,6 +1,6 @@
 import click
-from actions.deployment_actions import handle_deployment_action
-from actions.evaluation_actions import handle_model_action, handle_evaluation_action
+from remyxai.cli.deployment_actions import handle_deployment_action
+from remyxai.cli.evaluation_actions import handle_model_action, handle_evaluation_action
 
 @click.group()
 def cli():

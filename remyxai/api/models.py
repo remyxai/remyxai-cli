@@ -1,5 +1,7 @@
-import requests
 import os
+import shutil
+import requests
+from io import BytesIO
 from . import BASE_URL, HEADERS, log_api_response
 
 def list_models():
@@ -20,11 +22,11 @@ def delete_model(model_name: str):
 def download_model(model_name: str, model_format: str):
     url = f"{BASE_URL}model/download/{model_name}/{model_format}"
     response = requests.post(url, headers=HEADERS, stream=True)
+
     if response.status_code == 200:
         filename = f"{model_name}.zip"
         with open(filename, "wb") as out_file:
             shutil.copyfileobj(response.raw, out_file)
-        return f"The file {filename} was saved successfully"
+        return response  # Return the full response object
     else:
-        return f"Failed to download the model. Status Code: {response.status_code}"
-
+        return response  # Return the response even if there's an error

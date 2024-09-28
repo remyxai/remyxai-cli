@@ -1,4 +1,4 @@
-from client.remyx_client import RemyxAPI
+from remyxai.client.remyx_client import RemyxAPI
 
 def handle_deployment_action(args):
     """Handle deployment actions (up/down) for a model."""
