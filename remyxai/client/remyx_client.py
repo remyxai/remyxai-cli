@@ -1,24 +1,116 @@
 import logging
-from typing import List
-from remyxai.api.evaluations import evaluate_myxboard, EvaluationTask
-from remyxai.api.models import list_models, get_model_summary, delete_model, download_model
-from remyxai.api.tasks import train_classifier, train_detector, train_generator
+from typing import List, Optional
+from remyxai.api.models import (
+    list_models,
+    get_model_summary,
+    delete_model,
+    download_model,
+)
+from remyxai.api.tasks import run_myxmatch, get_job_status
 from remyxai.api.deployment import deploy_model, download_deployment_package
 from remyxai.api.inference import run_inference
 from remyxai.api.user import get_user_profile, get_user_credits
+from remyxai.api.evaluations import list_evaluations, download_evaluation, delete_evaluation, EvaluationTask
 
-from remyxai.client.myxboard import MyxBoard
 
 class RemyxAPI:
-    def evaluate(self, myx_board: MyxBoard, tasks: List[EvaluationTask], prompt: Optional[str] = None) -> None:
-        """Run evaluations for a MyxBoard on specific tasks."""
+    def evaluate(
+        self,
+        myx_board,
+        tasks: List[EvaluationTask],
+        prompt: Optional[str] = None,
+    ) -> None:
+        """
+        Run evaluations for a MyxBoard on specific tasks.
+
+        :param myx_board: The MyxBoard to evaluate.
+        :param tasks: List of tasks to evaluate the models on.
+        :param prompt: Optional prompt for tasks like MYXMATCH that require it.
+        """
         try:
-            # Ensure a prompt is provided when MYXMATCH is included in the tasks
-            task_list = [task.value for task in tasks]
-            evaluate_myxboard(myx_board, task_list, prompt)
-            logging.info(f"Evaluation submitted for tasks: {task_list}")
+            # Ensure "job_status" is initialized in the MyxBoard results
+            if "job_status" not in myx_board.results:
+                myx_board.results["job_status"] = {}
+
+            for task in tasks:
+                task_name = task.value
+
+                if task == EvaluationTask.MYXMATCH:
+                    if not prompt:
+                        raise ValueError(f"Task '{task_name}' requires a prompt.")
+
+                    # Run MYXMATCH task using the provided prompt
+                    job_response = run_myxmatch(
+                        myx_board.name, prompt, myx_board.models
+                    )
+
+                    # Store the job name in the job_status dictionary
+                    job_name = job_response.get("job_name")
+                    myx_board.results["job_status"][task_name] = {
+                        "job_name": job_name,
+                        "status": "pending"  # Initial status is 'pending'
+                    }
+
+                else:
+                    # Handle other tasks (future extensions)
+                    pass
+
+            logging.info(
+                f"Evaluations submitted for MyxBoard '{myx_board.name}' with tasks: {tasks}"
+            )
+
         except Exception as e:
             logging.error(f"Error during evaluation: {e}")
+            raise
+
+    def check_job_status(self, myx_board) -> None:
+        """
+        Check the status of all jobs associated with the MyxBoard.
+
+        :param myx_board: The MyxBoard for which to check job statuses.
+        """
+        try:
+            for task, job_info in myx_board.results.get("job_status", {}).items():
+                job_name = job_info.get("job_name")
+                status_response = get_job_status(job_name)  # Use job_name to query status
+                status = status_response.get("status")
+
+                # Update the status in the results
+                myx_board.results["job_status"][task]["status"] = status
+
+                logging.info(f"Task '{task}' job status: {status}")
+
+                if status == "completed":
+                    logging.info(f"Task '{task}' completed.")
+                else:
+                    logging.info(f"Task '{task}' still running with status: {status}")
+
+        except Exception as e:
+            logging.error(f"Error checking job status: {e}")
+            raise
+
+    def list_evaluations(self):
+        """List available evaluations."""
+        try:
+            return list_evaluations()
+        except Exception as e:
+            logging.error(f"Error listing evaluations: {e}")
+            raise
+
+    def download_evaluation(self, eval_type: str, eval_name: str):
+        """Download results of a specific evaluation."""
+        try:
+            return download_evaluation(eval_type, eval_name)
+        except Exception as e:
+            logging.error(f"Error downloading evaluation for {eval_name}: {e}")
+            raise
+
+    def delete_evaluation(self, eval_type: str, eval_name: str):
+        """Delete a specific evaluation."""
+        try:
+            return delete_evaluation(eval_type, eval_name)
+        except Exception as e:
+            logging.error(f"Error deleting evaluation {eval_name}: {e}")
             raise
 
     def list_models(self):
@@ -53,31 +145,7 @@ class RemyxAPI:
             logging.error(f"Error downloading model {model_name}: {e}")
             raise
 
-    def train_classifier(self, model_name: str, labels: list, model_selector: str, hf_dataset=None):
-        """Train a classification model."""
-        try:
-            return train_classifier(model_name, labels, model_selector, hf_dataset)
-        except Exception as e:
-            logging.error(f"Error training classifier for {model_name}: {e}")
-            raise
-
-    def train_detector(self, model_name: str, labels: list, model_selector: str, hf_dataset=None):
-        """Train a detection model."""
-        try:
-            return train_detector(model_name, labels, model_selector, hf_dataset)
-        except Exception as e:
-            logging.error(f"Error training detector for {model_name}: {e}")
-            raise
-
-    def train_generator(self, model_name: str, hf_dataset: str):
-        """Train a generative model."""
-        try:
-            return train_generator(model_name, hf_dataset)
-        except Exception as e:
-            logging.error(f"Error training generator for {model_name}: {e}")
-            raise
-
-    def deploy_model(self, model_name: str, action='up'):
+    def deploy_model(self, model_name: str, action="up"):
         """Deploy or tear down a model."""
         try:
             response = deploy_model(model_name, action)
@@ -87,7 +155,13 @@ class RemyxAPI:
             logging.error(f"Error deploying model {model_name}: {e}")
             raise
 
-    def run_inference(self, model_name: str, prompt: str, server_url="localhost:8000", model_version="1"):
+    def run_inference(
+        self,
+        model_name: str,
+        prompt: str,
+        server_url="localhost:8000",
+        model_version="1",
+    ):
         """Run inference on a model."""
         try:
             return run_inference(model_name, prompt, server_url, model_version)
@@ -110,3 +184,4 @@ class RemyxAPI:
         except Exception as e:
             logging.error(f"Error retrieving user credits: {e}")
             raise
+
