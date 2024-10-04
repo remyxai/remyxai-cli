@@ -8,6 +8,7 @@ from . import BASE_URL, HEADERS
 class EvaluationTask(Enum):
     MYXMATCH = "myxmatch"
 
+
 def list_evaluations() -> list:
     """List all evaluations from the server."""
     url = f"{BASE_URL}/evaluation/list"
@@ -16,13 +17,14 @@ def list_evaluations() -> list:
 
     if response.status_code == 200:
         try:
-            return response.json().get('message', [])
+            return response.json().get("message", [])
         except (requests.JSONDecodeError, ValueError) as e:
             logging.error(f"Error decoding JSON response: {e}")
             return {"error": "Invalid JSON response"}
     else:
         logging.error(f"Failed to fetch evaluations: {response.status_code}")
         return {"error": f"Failed to fetch evaluations: {response.text}"}
+
 
 def download_evaluation(eval_type: str, eval_name: str) -> dict:
     """Download evaluation results from the server."""
@@ -39,6 +41,7 @@ def download_evaluation(eval_type: str, eval_name: str) -> dict:
     else:
         logging.error(f"Failed to download evaluation: {response.status_code}")
         return {"error": f"Failed to download evaluation: {response.text}"}
+
 
 def delete_evaluation(eval_type: str, eval_name: str) -> dict:
     """Delete an evaluation from the server."""

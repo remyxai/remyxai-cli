@@ -10,7 +10,12 @@ from remyxai.api.tasks import run_myxmatch, get_job_status
 from remyxai.api.deployment import deploy_model, download_deployment_package
 from remyxai.api.inference import run_inference
 from remyxai.api.user import get_user_profile, get_user_credits
-from remyxai.api.evaluations import list_evaluations, download_evaluation, delete_evaluation, EvaluationTask
+from remyxai.api.evaluations import (
+    list_evaluations,
+    download_evaluation,
+    delete_evaluation,
+    EvaluationTask,
+)
 
 
 class RemyxAPI:
@@ -48,7 +53,7 @@ class RemyxAPI:
                     job_name = job_response.get("job_name")
                     myx_board.results["job_status"][task_name] = {
                         "job_name": job_name,
-                        "status": "pending"  # Initial status is 'pending'
+                        "status": "pending",  # Initial status is 'pending'
                     }
 
                 else:
@@ -72,7 +77,9 @@ class RemyxAPI:
         try:
             for task, job_info in myx_board.results.get("job_status", {}).items():
                 job_name = job_info.get("job_name")
-                status_response = get_job_status(job_name)  # Use job_name to query status
+                status_response = get_job_status(
+                    job_name
+                )  # Use job_name to query status
                 status = status_response.get("status")
 
                 # Update the status in the results
@@ -184,4 +191,3 @@ class RemyxAPI:
         except Exception as e:
             logging.error(f"Error retrieving user credits: {e}")
             raise
-

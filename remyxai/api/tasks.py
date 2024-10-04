@@ -6,10 +6,25 @@ from . import BASE_URL, HEADERS, log_api_response
 
 def run_myxmatch(name: str, prompt: str, models: list) -> dict:
     """Submit a MyxMatch task to the server."""
-    models_str = ",".join(models)
-    encoded_prompt = urllib.parse.quote(prompt)
-    url = f"{BASE_URL}/task/myxmatch/{name}/{encoded_prompt}/{models_str}"
+    mapped_models = []
+    for model in models:
+        # Map Hugging Face model repos to supported names
+        if "/" in model:
+            mapped_model = model.split("/")[1]
+        else:
+            mapped_model = model
+
+        mapped_models.append(mapped_model)
+
+    models_str = ",".join(mapped_models)
+
+    # Ensure name and prompt are URL-encoded for safe API usage
+    encoded_name = urllib.parse.quote(name.replace("/", "--"), safe="")
+    encoded_prompt = urllib.parse.quote(prompt, safe="")
+
+    url = f"{BASE_URL}/task/myxmatch/{encoded_name}/{encoded_prompt}/{models_str}"
     logging.info(f"POST request to {url}")
+
     response = requests.post(url, headers=HEADERS)
 
     if response.status_code == 202:
@@ -21,6 +36,7 @@ def run_myxmatch(name: str, prompt: str, models: list) -> dict:
     else:
         logging.error(f"Failed to create MyxMatch task: {response.status_code}")
         return {"error": f"Failed to create MyxMatch task: {response.text}"}
+
 
 def get_job_status(job_name: str) -> dict:
     """
@@ -34,13 +50,10 @@ def get_job_status(job_name: str) -> dict:
 
     try:
         response = requests.get(url, headers=HEADERS)
-
-        # Log the raw response text to diagnose any issues
         logging.debug(f"Raw response from server: {response.text}")
 
-        # Try to parse the response as JSON
-        response.raise_for_status()  # Raises an HTTPError for bad responses
-        return response.json()  # Try to parse JSON
+        response.raise_for_status()
+        return response.json()
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred: {http_err}")
         return {"status": "error", "message": str(http_err)}
@@ -48,9 +61,9 @@ def get_job_status(job_name: str) -> dict:
         logging.error(f"Request error occurred: {req_err}")
         return {"status": "error", "message": str(req_err)}
     except ValueError as json_err:
-        # ValueError occurs when response.json() fails to parse
         logging.error(f"JSON parse error: {json_err}")
         return {"status": "error", "message": "Failed to parse JSON response"}
+
 
 def train_classifier(
     model_name: str, labels: list, model_selector: str, hf_dataset=None
