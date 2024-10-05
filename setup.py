@@ -17,6 +17,8 @@ setup(
         "tqdm",
         "tritonclient",
         "huggingface_hub",
+        "datasets",
+        "pandas",
     ],
     entry_points={
         "console_scripts": [

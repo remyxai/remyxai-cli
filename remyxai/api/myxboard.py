@@ -87,7 +87,12 @@ def download_myxboard(myxboard_name: str) -> dict:
 
     if response.status_code == 200:
         try:
-            return response.json()
+            results = response.json()
+            print("DOWNLOADING RESULTS: ", results)
+            if "message" in results:
+                return results["message"]
+            else:
+                return results
         except (requests.JSONDecodeError, ValueError) as e:
             logging.error(f"Error decoding JSON response: {e}")
             return {"error": "Invalid JSON response"}
