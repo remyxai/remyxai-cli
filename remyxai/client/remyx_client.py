@@ -1,4 +1,7 @@
+import time
 import logging
+import threading
+from datetime import datetime
 from typing import List, Optional
 from remyxai.api.models import (
     list_models,
@@ -16,6 +19,7 @@ from remyxai.api.evaluations import (
     delete_evaluation,
     EvaluationTask,
 )
+from remyxai.utils.myxboard import format_results_for_storage, notify_completion
 
 
 class RemyxAPI:
@@ -24,94 +28,62 @@ class RemyxAPI:
         myx_board,
         tasks: List[EvaluationTask],
         prompt: Optional[str] = None,
+        on_complete: Optional[callable] = notify_completion,
     ) -> None:
         """
-        Run evaluations for a MyxBoard on specific tasks.
-
+        Run evaluations for a MyxBoard on specific tasks and start asynchronous polling.
         :param myx_board: The MyxBoard to evaluate.
-        :param tasks: List of tasks to evaluate the models on.
+        :param tasks: List of tasks to evaluate.
         :param prompt: Optional prompt for tasks like MYXMATCH that require it.
+        :param on_complete: Callback function to call once evaluations are complete.
         """
         try:
-            # Ensure "job_status" is initialized in the MyxBoard results
             if "job_status" not in myx_board.results:
                 myx_board.results["job_status"] = {}
 
             for task in tasks:
                 task_name = task.value
-
                 if task == EvaluationTask.MYXMATCH:
                     if not prompt:
                         raise ValueError(f"Task '{task_name}' requires a prompt.")
 
-                    # Run MYXMATCH task using the provided prompt
                     job_response = run_myxmatch(
                         myx_board.name, prompt, myx_board.models
                     )
 
-                    # Store the job name and initialize status as 'pending'
                     job_name = job_response.get("job_name")
+                    start_time = time.time()
+
                     myx_board.results["job_status"][task_name] = {
                         "job_name": job_name,
-                        "status": "pending",  # Initial status is 'pending'
+                        "status": "pending",
+                        "start_time": start_time,
                     }
 
-                else:
-                    # Handle other tasks (future extensions)
-                    pass
-
-            # Save updates to MyxBoard to persist the new job status
             myx_board._save_updates()
-
-            logging.info(
-                f"Evaluations submitted for MyxBoard '{myx_board.name}' with tasks: {tasks}"
+            print("Starting evaluation...")
+            polling_thread = threading.Thread(
+                target=self._poll_for_completion, args=(myx_board, on_complete)
             )
+            polling_thread.start()
 
         except Exception as e:
             logging.error(f"Error during evaluation: {e}")
             raise
 
-    def check_job_status(self, myx_board) -> None:
+    def _poll_for_completion(self, myx_board, on_complete: Optional[callable]) -> None:
         """
-        Check the status of all jobs associated with the MyxBoard and update results if jobs are complete.
-
-        :param myx_board: The MyxBoard for which to check job statuses.
+        Poll in the background to check job completion status, and fetch results when done.
+        :param myx_board: The MyxBoard instance to poll for.
+        :param on_complete: Function to call when polling completes.
         """
-        try:
-            for task, job_info in myx_board.results.get("job_status", {}).items():
-                job_name = job_info.get("job_name")
-                status_response = get_job_status(job_name)  # Query the status by job_name
-                status = status_response.get("status")
+        while not myx_board.poll_and_store_results():
+            logging.info("Jobs still running, polling again in 30 seconds.")
+            time.sleep(120)
 
-                # Update the status in the results
-                myx_board.results["job_status"][task]["status"] = status
-
-                logging.info(f"Task '{task}' job status: {status}")
-
-                if status == "COMPLETED":
-                    logging.info(f"Task '{task}' completed. Fetching results...")
-                    # Fetch evaluation results for the completed job
-                    eval_results = download_evaluation(task, myx_board._sanitized_name)
-                    eval_results = eval_results.get("message", eval_results)
-
-                    # Store results in the MyxBoard
-                    myx_board.results[task] = eval_results
-
-                    # Mark job as completed
-                    myx_board.results["job_status"][task]["status"] = "COMPLETED"
-
-                    # Save updates to MyxBoard after fetching the results
-                    myx_board._save_updates()
-
-                else:
-                    logging.info(f"Task '{task}' still running with status: {status}")
-
-            # Save the job status updates
-            myx_board._save_updates()
-
-        except Exception as e:
-            logging.error(f"Error checking job status: {e}")
-            raise
+        logging.info("All jobs completed, results have been stored.")
+        if on_complete:
+            on_complete()
 
     def list_evaluations(self):
         """List available evaluations."""
