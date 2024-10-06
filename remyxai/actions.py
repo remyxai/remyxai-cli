@@ -2,6 +2,7 @@ from .api import *
 import json
 from .utils import labeler
 
+
 def handle_model_action(args):
     if args.subaction == "list":
         models = list_models()
@@ -15,20 +16,33 @@ def handle_model_action(args):
         raise ValueError(f"Invalid subaction for 'model': {args.subaction}")
     logging.info(json.dumps(models, indent=2))
 
+
 def handle_training_action(args):
-    labels = [x.strip() for x in args.labels.split(",")] if args.action != "generate" else None
+    labels = (
+        [x.strip() for x in args.labels.split(",")]
+        if args.action != "generate"
+        else None
+    )
     if args.action == "classify":
-        result = train_classifier(args.model_name, labels, args.model_size, args.hf_dataset)
+        result = train_classifier(
+            args.model_name, labels, args.model_size, args.hf_dataset
+        )
     elif args.action == "detect":
-        result = train_detector(args.model_name, labels, args.model_size, args.hf_dataset)
+        result = train_detector(
+            args.model_name, labels, args.model_size, args.hf_dataset
+        )
     elif args.action == "generate":
         result = train_generator(args.model_name, args.hf_dataset)
     logging.info(json.dumps(result, indent=2))
 
+
 def handle_inference(args):
-    result, time_elapsed = run_inference(args.model_name, args.prompt, args.server_url, args.model_version)
+    result, time_elapsed = run_inference(
+        args.model_name, args.prompt, args.server_url, args.model_version
+    )
     logging.info(f"Inference time: {time_elapsed:.4f} seconds")
     logging.info(json.dumps(result, indent=2))
+
 
 def handle_user_action(args):
     if args.subaction == "profile":
@@ -38,6 +52,7 @@ def handle_user_action(args):
     else:
         raise ValueError(f"Invalid subaction for 'user': {args.subaction}")
     logging.info(json.dumps(result, indent=2))
+
 
 def handle_utils_action(args):
     if args.subaction == "label":
