@@ -9,7 +9,8 @@ import numpy as np
 from PIL import Image
 from ast import literal_eval
 import onnxruntime as ort
-from remyxai.api import get_model_summary, train_classifier, download_model
+from remyxai.api.tasks import train_classifier
+from remyxai.api.models import get_model_summary, download_model
 
 # Utilities
 
@@ -128,3 +129,4 @@ def labeler(labels: list, image_dir: str, model_name=None):
     # Step 3: Process images using the downloaded model
     process_message = process_images_in_directory(image_dir, model, chunk_size=8)
     return process_message
+

@@ -6,7 +6,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.1.7",
+    version="0.1.8",
     packages=find_packages(include=["remyxai", "remyxai.*"]),
     install_requires=[
         "numpy",
@@ -22,7 +22,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "remyxai=remyxai.cli.commands:cli",  # Adjusted to point to the `cli` command group
+            "remyxai=remyxai.cli.commands:cli",
         ],
     },
     long_description=long_description,
@@ -32,6 +32,5 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.6",  # Specify the minimum Python version requirement
+    python_requires=">=3.6",
 )
-
