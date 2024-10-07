@@ -1,6 +1,6 @@
 import logging
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def notify_completion():
@@ -86,8 +86,9 @@ def get_start_end_times(job_status_response):
     """
     Extract start and end times from job status response.
     """
-    start_time = job_status_response.get("start_time", datetime.utcnow().isoformat())
-    end_time = job_status_response.get("end_time", datetime.utcnow().isoformat())
+
+    start_time = job_status_response.get("start_time", datetime.now(timezone.utc).isoformat())
+    end_time = job_status_response.get("end_time", datetime.now(timezone.utc).isoformat())
     return start_time, end_time
 
 
