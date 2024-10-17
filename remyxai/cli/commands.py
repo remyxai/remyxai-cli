@@ -1,7 +1,7 @@
 import click
 from remyxai.cli.deployment_actions import handle_deployment_action
 from remyxai.cli.evaluation_actions import handle_model_action, handle_evaluation_action
-
+from remyxai.cli.dataset_actions import handle_dataset_action
 
 @click.group()
 def cli():
@@ -48,6 +48,17 @@ def deploy_model(model_name, action):
         handle_deployment_action({"model_name": model_name, "action": action})
     except Exception as e:
         click.echo(f"Error deploying model: {e}")
+
+
+@cli.command()
+@click.argument("action")
+@click.argument("dataset_name", required=False)
+def dataset(action, dataset_name=None):
+    """Manage datasets."""
+    try:
+        handle_dataset_action({"action": action, "dataset_name": dataset_name})
+    except Exception as e:
+        click.echo(f"Error managing dataset: {e}")
 
 
 if __name__ == "__main__":
