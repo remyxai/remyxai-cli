@@ -86,3 +86,32 @@ def train_generator(model_name: str, hf_dataset: str):
     params = {"hf_dataset": hf_dataset}
     response = requests.post(url, headers=HEADERS, params=params)
     return response.json()
+
+
+def run_datacomposer(dataset_name: str, num_samples: int, context: str = None, dataset_file = None) -> dict:
+    """
+    Run a datacomposer task to compose or extend a dataset from file or context.
+    """
+    url = f"{BASE_URL}/task/datacomposer/{dataset_name}/{num_samples}"
+    
+    data = {}
+    if context:
+        data['context'] = context
+
+    files = {}
+    if dataset_file:
+        files['dataset-file'] = dataset_file
+
+    logging.info(f"POST request to {url}")
+
+    try:
+        if files:
+            response = requests.post(url, data=data, files=files, headers=HEADERS)
+        else:
+            response = requests.post(url, json=data, headers=HEADERS)
+        
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error in datacomposer task: {e}")
+        return {"error": str(e)}
