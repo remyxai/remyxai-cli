@@ -28,7 +28,7 @@ def download_dataset(dataset_type: str, dataset_name: str):
     if response.status_code == 200:
         presigned_url = response.json().get("presigned_url", "")
         if presigned_url:
-            filename = f"{dataset_name}.zip"
+            filename = f"{dataset_name}.csv"
             with requests.get(presigned_url, stream=True) as r:
                 with open(filename, "wb") as out_file:
                     shutil.copyfileobj(r.raw, out_file)
