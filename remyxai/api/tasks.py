@@ -2,6 +2,8 @@ import logging
 import requests
 import urllib.parse
 from . import BASE_URL, HEADERS, log_api_response
+from typing import Optional
+
 
 
 def run_myxmatch(name: str, prompt: str, models: list) -> dict:
@@ -86,3 +88,49 @@ def train_generator(model_name: str, hf_dataset: str):
     params = {"hf_dataset": hf_dataset}
     response = requests.post(url, headers=HEADERS, params=params)
     return response.json()
+
+
+def run_datacomposer(dataset_name: str, num_samples: int, context: Optional[str] = None, dataset_file: Optional[str] = None) -> dict:
+    """
+    Submit a Data Composer task to the server. Supports file upload, Hugging Face dataset, or text prompt.
+    Args:
+        dataset_name (str): The name of the dataset to compose or extend.
+        num_samples (int): The number of samples to create.
+        context (Optional[str]): The context, which could be a Hugging Face dataset or a text prompt.
+        dataset_file (Optional[str]): Path to the dataset file to upload, if any.
+    Returns:
+        dict: The server's response.
+    """
+    url = f"{BASE_URL}/task/datacomposer/{urllib.parse.quote(dataset_name)}/{num_samples}"
+    headers = {"Authorization": HEADERS["Authorization"]}
+    logging.info(f"POST request to {url}")
+    data = {}
+    files = None
+    if context:
+        data['context'] = context
+    if dataset_file:
+        try:
+            files = {'dataset-file': open(dataset_file, 'rb')}
+        except FileNotFoundError as e:
+            logging.error(f"Dataset file not found: {e}")
+            return {"error": "Dataset file not found."}
+    try:
+        if files:
+            response = requests.post(url, headers=headers, data=data, files=files)
+        else:
+            response = requests.post(url, headers=headers, data=data)
+        if response.status_code == 202:
+            try:
+                return response.json()
+            except (requests.JSONDecodeError, ValueError) as e:
+                logging.error(f"Error decoding JSON response: {e}")
+                return {"error": "Invalid JSON response"}
+        else:
+            logging.error(f"Failed to create Data Composer task: {response.status_code}")
+            return {"error": f"Failed to create Data Composer task: {response.text}"}
+    except Exception as e:
+        logging.error(f"An error occurred while making the request: {e}")
+        return {"error": str(e)}
+    finally:
+        if files:
+            files['dataset-file'].close()
