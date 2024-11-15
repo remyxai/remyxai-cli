@@ -9,7 +9,7 @@ from remyxai.api.models import (
     delete_model,
     download_model,
 )
-from remyxai.api.tasks import run_myxmatch, get_job_status
+from remyxai.api.tasks import run_myxmatch, run_benchmark, get_job_status
 from remyxai.api.deployment import deploy_model, download_deployment_package
 from remyxai.api.inference import run_inference
 from remyxai.api.user import get_user_profile, get_user_credits
@@ -18,6 +18,8 @@ from remyxai.api.evaluations import (
     download_evaluation,
     delete_evaluation,
     EvaluationTask,
+    BenchmarkTask,
+    AvailableModels,
 )
 from remyxai.utils.myxboard import format_results_for_storage, notify_completion
 
@@ -28,6 +30,7 @@ class RemyxAPI:
         myx_board,
         tasks: List[EvaluationTask],
         prompt: Optional[str] = None,
+        benchmark_tasks: Optional[List[str]] = None,
         on_complete: Optional[callable] = notify_completion,
     ) -> None:
         """
@@ -35,6 +38,7 @@ class RemyxAPI:
         :param myx_board: The MyxBoard to evaluate.
         :param tasks: List of tasks to evaluate.
         :param prompt: Optional prompt for tasks like MYXMATCH that require it.
+        :param benchmark_tasks: Specific benchmark tasks as strings for BENCHMARK evaluation.
         :param on_complete: Callback function to call once evaluations are complete.
         """
         try:
@@ -43,22 +47,65 @@ class RemyxAPI:
 
             for task in tasks:
                 task_name = task.value
+
                 if task == EvaluationTask.MYXMATCH:
                     if not prompt:
                         raise ValueError(f"Task '{task_name}' requires a prompt.")
 
+                    supported_models = [
+                        model
+                        for model in myx_board.models
+                        if model in AvailableModels.list_models()
+                    ]
+
+                    if not supported_models:
+                        raise ValueError(
+                            "No supported models provided for MyxMatch evaluation."
+                        )
+
+                    formatted_models = [
+                        model.split("/")[-1] for model in myx_board.models
+                    ]
                     job_response = run_myxmatch(
-                        myx_board.name, prompt, myx_board.models
+                        myx_board.name, prompt, formatted_models
                     )
 
-                    job_name = job_response.get("job_name")
-                    start_time = time.time()
+                elif task == EvaluationTask.BENCHMARK:
+                    if not benchmark_tasks:
+                        raise ValueError(
+                            "Benchmark tasks must be specified for BENCHMARK evaluation."
+                        )
 
-                    myx_board.results["job_status"][task_name] = {
-                        "job_name": job_name,
-                        "status": "pending",
-                        "start_time": start_time,
-                    }
+                    valid_benchmarks = BenchmarkTask.list_tasks()
+                    invalid_tasks = [
+                        bt for bt in benchmark_tasks if bt not in valid_benchmarks
+                    ]
+                    if invalid_tasks:
+                        raise ValueError(f"Invalid benchmark tasks: {invalid_tasks}")
+
+                    supported_models = [
+                        model
+                        for model in myx_board.models
+                        if model in AvailableModels.list_models()
+                    ]
+
+                    if not supported_models:
+                        raise ValueError(
+                            "No supported models provided for benchmarking."
+                        )
+
+                    job_response = run_benchmark(
+                        myx_board.name, supported_models, benchmark_tasks
+                    )
+
+                job_name = job_response.get("job_name")
+                start_time = time.time()
+
+                myx_board.results["job_status"][task_name] = {
+                    "job_name": job_name,
+                    "status": "pending",
+                    "start_time": start_time,
+                }
 
             myx_board._save_updates()
             print("Starting evaluation...")

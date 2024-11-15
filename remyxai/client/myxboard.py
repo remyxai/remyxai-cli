@@ -3,7 +3,7 @@ import time
 import logging
 from typing import List, Dict, Optional, Union
 import urllib.parse
-from remyxai.api.evaluations import EvaluationTask, download_evaluation
+from remyxai.api.evaluations import EvaluationTask, AvailableModels, download_evaluation
 from remyxai.api.tasks import get_job_status
 from remyxai.api.myxboard import (
     list_myxboards,
@@ -30,19 +30,6 @@ from huggingface_hub import (
 
 
 class MyxBoard:
-    MYXMATCH_SUPPORTED_MODELS = [
-        "Phi-3-mini-4k-instruct",
-        "BioMistral-7B",
-        "CodeLlama-7b-Instruct-hf",
-        "gorilla-openfunctions-v2",
-        "Llama-2-7b-hf",
-        "Mistral-7B-Instruct-v0.3",
-        "Meta-Llama-3-8B",
-        "Meta-Llama-3-8B-Instruct",
-        "Qwen2-1.5B",
-        "Qwen2-1.5B-Instruct",
-    ]
-
     def __init__(
         self,
         model_repo_ids: Optional[List[str]] = None,
@@ -60,7 +47,7 @@ class MyxBoard:
             self.models = model_repo_ids or []
             self.from_hf_collection = False
 
-        _validate_models(self.models, self.MYXMATCH_SUPPORTED_MODELS)
+        _validate_models(self.models, AvailableModels.list_models())
         self.results = {}
         self.job_status = {}
 
@@ -88,15 +75,23 @@ class MyxBoard:
                         f"Fetched eval_results for task {task_name}: {eval_results}"
                     )
 
-                    if isinstance(eval_results, dict) and "models" in eval_results:
+                    if isinstance(eval_results, dict):
                         logging.info(f"Formatting results for task: {task_name}")
-                        formatted_results = format_results_for_storage(
-                            eval_results, task_name, job_info["start_time"], time.time()
-                        )
-                        logging.info(
-                            f"Formatted results for task {task_name}: {formatted_results}"
-                        )
-                        self.results[task_name] = formatted_results
+                        try:
+                            formatted_results = format_results_for_storage(
+                                eval_results,
+                                task_name,
+                                job_info["start_time"],
+                                time.time(),
+                            )
+                            logging.info(
+                                f"Formatted results for task {task_name}: {formatted_results}"
+                            )
+                            self.results[task_name] = formatted_results
+                        except Exception as e:
+                            logging.error(
+                                f"Error formatting results for task {task_name}: {e}"
+                            )
                     else:
                         logging.error(
                             f"Unexpected format for eval_results: {eval_results}"
@@ -153,23 +148,50 @@ class MyxBoard:
     def _fetch_evaluation_results(self, task_name: str) -> Dict[str, Union[str, dict]]:
         """
         Fetch evaluation results from the server for a completed job and return them.
+        Handles both 'myxmatch' and 'benchmark' tasks appropriately.
         """
         try:
             logging.info(f"Fetching evaluation results for task: {task_name}")
             eval_results = download_evaluation(task_name, self._sanitized_name)
+            eval_results = eval_results.get("message", {})
 
             logging.info(
                 f"Raw eval_results fetched for task {task_name}: {eval_results}"
             )
 
-            if isinstance(eval_results, dict):
-                eval_results = eval_results.get("message", eval_results)
-            else:
+            if not isinstance(eval_results, dict):
                 logging.error(f"Invalid eval_results format: {eval_results}")
                 return {}
 
-            logging.info(f"Successfully fetched results for task: {task_name}")
-            return eval_results
+            if task_name == "myxmatch" and "models" in eval_results:
+                logging.info(f"Processing 'myxmatch' results for task {task_name}")
+                return eval_results
+
+            if task_name == "benchmark":
+                benchmark_results = eval_results.get("benchmark_results", {})
+                if not isinstance(benchmark_results, dict):
+                    logging.error(
+                        f"Invalid 'benchmark_results' structure: {benchmark_results}"
+                    )
+                    return {}
+
+                final_eval = benchmark_results.get("final_eval", {})
+                if isinstance(final_eval, dict) and "benchmark" in final_eval:
+                    logging.info(f"Processing 'benchmark' results for task {task_name}")
+                    return {
+                        "benchmark": final_eval["benchmark"],
+                        "eval_tasks": benchmark_results.get("eval_tasks", ""),
+                        "execution_time": benchmark_results.get("exp_time", ""),
+                        "run_id": benchmark_results.get("run_id", ""),
+                    }
+                else:
+                    logging.error(
+                        f"Unexpected 'final_eval' structure in 'benchmark_results': {final_eval}"
+                    )
+                    return {}
+
+            logging.error(f"Unexpected format or unsupported task: {eval_results}")
+            return {}
 
         except Exception as e:
             logging.error(
@@ -195,16 +217,34 @@ class MyxBoard:
             simplified_task_results = []
             for result in task_results:
                 model_name = result["config_general"]["model_name"]
-                rank = (
-                    result["results"]
-                    .get(f"{task_name}|general|0", {})
-                    .get("rank", None)
-                )
-                prompt = result["details"].get("full_prompt", "")
 
-                simplified_task_results.append(
-                    {"model": model_name, "rank": rank, "prompt": prompt}
-                )
+                if task_name == "myxmatch":
+                    rank = (
+                        result["results"]
+                        .get(f"{task_name}|general|0", {})
+                        .get("rank", None)
+                    )
+                    prompt = result["details"].get("full_prompt", "")
+
+                    simplified_task_results.append(
+                        {"model": model_name, "rank": rank, "prompt": prompt}
+                    )
+                elif task_name == "benchmark":
+                    model_results = result["results"]
+                    simplified_task_results.append(
+                        {
+                            "model": model_name,
+                            "metrics": model_results,
+                            "eval_tasks": result["details"].get("eval_tasks", ""),
+                            "execution_time": result["details"].get(
+                                "execution_time", ""
+                            ),
+                            "run_id": result["details"].get("run_id", ""),
+                        }
+                    )
+                else:
+                    logging.warning(f"Unknown task type: {task_name}")
+                    continue
 
             simplified_results[task_name] = simplified_task_results
 
