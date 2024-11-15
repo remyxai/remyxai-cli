@@ -6,7 +6,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.1.8",
+    version="0.1.9",
     packages=find_packages(include=["remyxai", "remyxai.*"]),
     install_requires=[
         "numpy",
@@ -15,7 +15,7 @@ setup(
         "pillow",
         "requests",
         "tqdm",
-        "tritonclient",
+        "tritonclient[all]",
         "huggingface_hub",
         "datasets",
         "pandas",
