@@ -5,12 +5,10 @@ from . import BASE_URL, HEADERS, log_api_response
 from typing import Optional
 
 
-
 def run_myxmatch(name: str, prompt: str, models: list) -> dict:
     """Submit a MyxMatch task to the server."""
     mapped_models = []
     for model in models:
-        # Map Hugging Face model repos to supported names
         if "/" in model:
             mapped_model = model.split("/")[1]
         else:
@@ -20,7 +18,6 @@ def run_myxmatch(name: str, prompt: str, models: list) -> dict:
 
     models_str = ",".join(mapped_models)
 
-    # Ensure name and prompt are URL-encoded for safe API usage
     encoded_name = urllib.parse.quote(name.replace("/", "--"), safe="")
     encoded_prompt = urllib.parse.quote(prompt, safe="")
 
@@ -39,6 +36,7 @@ def run_myxmatch(name: str, prompt: str, models: list) -> dict:
         logging.error(f"Failed to create MyxMatch task: {response.status_code}")
         return {"error": f"Failed to create MyxMatch task: {response.text}"}
 
+
 def run_benchmark(name: str, models: list, evals: list) -> dict:
     """Submit a benchmark task to the server."""
 
@@ -48,14 +46,9 @@ def run_benchmark(name: str, models: list, evals: list) -> dict:
     evals_str = ",".join(evals)
     encoded_name = urllib.parse.quote(name.replace("/", "--"), safe="")
 
-    # Endpoint URL
     url = f"{BASE_URL}/task/benchmark"
 
-    payload = {
-        "name": encoded_name,
-        "models": models_str,
-        "evals": evals_str
-    }
+    payload = {"name": encoded_name, "models": models_str, "evals": evals_str}
 
     logging.info(f"POST request to {url} with payload: {payload}")
 
@@ -122,7 +115,12 @@ def train_generator(model_name: str, hf_dataset: str):
     return response.json()
 
 
-def run_datacomposer(dataset_name: str, num_samples: int, context: Optional[str] = None, dataset_file: Optional[str] = None) -> dict:
+def run_datacomposer(
+    dataset_name: str,
+    num_samples: int,
+    context: Optional[str] = None,
+    dataset_file: Optional[str] = None,
+) -> dict:
     """
     Submit a Data Composer task to the server. Supports file upload, Hugging Face dataset, or text prompt.
     Args:
@@ -133,16 +131,18 @@ def run_datacomposer(dataset_name: str, num_samples: int, context: Optional[str]
     Returns:
         dict: The server's response.
     """
-    url = f"{BASE_URL}/task/datacomposer/{urllib.parse.quote(dataset_name)}/{num_samples}"
+    url = (
+        f"{BASE_URL}/task/datacomposer/{urllib.parse.quote(dataset_name)}/{num_samples}"
+    )
     headers = {"Authorization": HEADERS["Authorization"]}
     logging.info(f"POST request to {url}")
     data = {}
     files = None
     if context:
-        data['context'] = context
+        data["context"] = context
     if dataset_file:
         try:
-            files = {'dataset-file': open(dataset_file, 'rb')}
+            files = {"dataset-file": open(dataset_file, "rb")}
         except FileNotFoundError as e:
             logging.error(f"Dataset file not found: {e}")
             return {"error": "Dataset file not found."}
@@ -158,11 +158,13 @@ def run_datacomposer(dataset_name: str, num_samples: int, context: Optional[str]
                 logging.error(f"Error decoding JSON response: {e}")
                 return {"error": "Invalid JSON response"}
         else:
-            logging.error(f"Failed to create Data Composer task: {response.status_code}")
+            logging.error(
+                f"Failed to create Data Composer task: {response.status_code}"
+            )
             return {"error": f"Failed to create Data Composer task: {response.text}"}
     except Exception as e:
         logging.error(f"An error occurred while making the request: {e}")
         return {"error": str(e)}
     finally:
         if files:
-            files['dataset-file'].close()
+            files["dataset-file"].close()

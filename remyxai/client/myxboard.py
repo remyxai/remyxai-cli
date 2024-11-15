@@ -65,21 +65,24 @@ class MyxBoard:
         completed = True
         for task_name, job_info in self.results.get("job_status", {}).items():
             if job_info["status"] != "COMPLETED":
-                # Poll the job status
                 status = get_job_status(job_info["job_name"]).get("status", "unknown")
                 job_info["status"] = status
                 logging.info(f"Polling task: {task_name} | Current status: {status}")
 
                 if status == "COMPLETED":
                     eval_results = self._fetch_evaluation_results(task_name)
-                    logging.info(f"Fetched eval_results for task {task_name}: {eval_results}")
+                    logging.info(
+                        f"Fetched eval_results for task {task_name}: {eval_results}"
+                    )
 
                     if isinstance(eval_results, dict):
-                        # Format results based on the task type
                         logging.info(f"Formatting results for task: {task_name}")
                         try:
                             formatted_results = format_results_for_storage(
-                                eval_results, task_name, job_info["start_time"], time.time()
+                                eval_results,
+                                task_name,
+                                job_info["start_time"],
+                                time.time(),
                             )
                             logging.info(
                                 f"Formatted results for task {task_name}: {formatted_results}"
@@ -97,7 +100,6 @@ class MyxBoard:
                     completed = False
         self._save_updates()
         return completed
-
 
     def fetch_results(self) -> Dict[str, Union[str, dict]]:
         """
@@ -143,7 +145,6 @@ class MyxBoard:
             if task_name != "job_status"
         }
 
-
     def _fetch_evaluation_results(self, task_name: str) -> Dict[str, Union[str, dict]]:
         """
         Fetch evaluation results from the server for a completed job and return them.
@@ -154,23 +155,24 @@ class MyxBoard:
             eval_results = download_evaluation(task_name, self._sanitized_name)
             eval_results = eval_results.get("message", {})
 
-            logging.info(f"Raw eval_results fetched for task {task_name}: {eval_results}")
+            logging.info(
+                f"Raw eval_results fetched for task {task_name}: {eval_results}"
+            )
 
-            # Validate and process the eval_results structure
             if not isinstance(eval_results, dict):
                 logging.error(f"Invalid eval_results format: {eval_results}")
                 return {}
 
-            # Handle "myxmatch" task results
             if task_name == "myxmatch" and "models" in eval_results:
                 logging.info(f"Processing 'myxmatch' results for task {task_name}")
                 return eval_results
 
-            # Handle "benchmark" task results
             if task_name == "benchmark":
                 benchmark_results = eval_results.get("benchmark_results", {})
                 if not isinstance(benchmark_results, dict):
-                    logging.error(f"Invalid 'benchmark_results' structure: {benchmark_results}")
+                    logging.error(
+                        f"Invalid 'benchmark_results' structure: {benchmark_results}"
+                    )
                     return {}
 
                 final_eval = benchmark_results.get("final_eval", {})
@@ -188,14 +190,14 @@ class MyxBoard:
                     )
                     return {}
 
-            # Fallback for unexpected formats
             logging.error(f"Unexpected format or unsupported task: {eval_results}")
             return {}
 
         except Exception as e:
-            logging.error(f"Error fetching evaluation results for task {task_name}: {e}")
+            logging.error(
+                f"Error fetching evaluation results for task {task_name}: {e}"
+            )
             return {}
-
 
     def get_results(self, verbose: bool = False) -> dict:
         """
@@ -210,14 +212,13 @@ class MyxBoard:
 
         for task_name, task_results in self.results.items():
             if task_name == "job_status":
-                continue  # Skip job status
+                continue
 
             simplified_task_results = []
             for result in task_results:
                 model_name = result["config_general"]["model_name"]
 
                 if task_name == "myxmatch":
-                    # Simplify results for 'myxmatch' tasks
                     rank = (
                         result["results"]
                         .get(f"{task_name}|general|0", {})
@@ -229,14 +230,15 @@ class MyxBoard:
                         {"model": model_name, "rank": rank, "prompt": prompt}
                     )
                 elif task_name == "benchmark":
-                    # Simplify results for 'benchmark' tasks
                     model_results = result["results"]
                     simplified_task_results.append(
                         {
                             "model": model_name,
-                            "metrics": model_results,  # Include dynamic benchmark metrics
+                            "metrics": model_results,
                             "eval_tasks": result["details"].get("eval_tasks", ""),
-                            "execution_time": result["details"].get("execution_time", ""),
+                            "execution_time": result["details"].get(
+                                "execution_time", ""
+                            ),
                             "run_id": result["details"].get("run_id", ""),
                         }
                     )
@@ -247,7 +249,6 @@ class MyxBoard:
             simplified_results[task_name] = simplified_task_results
 
         return simplified_results
-
 
     def _save_updates(self) -> None:
         """

@@ -5,6 +5,7 @@ from enum import Enum
 from . import BASE_URL, HEADERS
 
 
+# More models coming soon
 class AvailableModels(Enum):
     PHI_3_MINI_4K_INSTRUCT = "microsoft/Phi-3-mini-4k-instruct"
     BIOMISTRAL_7B = "BioMistral/BioMistral-7B"
@@ -81,10 +82,9 @@ def list_evaluations() -> list:
         logging.error(f"Failed to fetch evaluations: {response.status_code}")
         return {"error": f"Failed to fetch evaluations: {response.text}"}
 
+
 def download_evaluation(task_name: str, eval_name: str) -> dict:
     """Download evaluation results using the task name and eval name."""
-    # Construct the correct URL for downloading evaluation results
-    # Ensure the name is not sanitized incorrectly here
     url = f"{BASE_URL}/evaluation/download/{task_name}/{eval_name}"
     logging.info(f"GET request to {url}")
 
@@ -101,6 +101,7 @@ def download_evaluation(task_name: str, eval_name: str) -> dict:
     else:
         logging.error(f"Failed to download evaluation result: {response.status_code}")
         return {"error": f"Failed to download evaluation result: {response.text}"}
+
 
 def delete_evaluation(eval_type: str, eval_name: str) -> dict:
     """Delete an evaluation from the server."""

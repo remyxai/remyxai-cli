@@ -19,7 +19,7 @@ from remyxai.api.evaluations import (
     delete_evaluation,
     EvaluationTask,
     BenchmarkTask,
-    AvailableModels
+    AvailableModels,
 )
 from remyxai.utils.myxboard import format_results_for_storage, notify_completion
 
@@ -48,46 +48,52 @@ class RemyxAPI:
             for task in tasks:
                 task_name = task.value
 
-                # Handle MYXMATCH task type
                 if task == EvaluationTask.MYXMATCH:
                     if not prompt:
                         raise ValueError(f"Task '{task_name}' requires a prompt.")
 
-                    # Filter supported models from the MyxBoard models list
                     supported_models = [
-                        model for model in myx_board.models
+                        model
+                        for model in myx_board.models
                         if model in AvailableModels.list_models()
                     ]
 
                     if not supported_models:
-                        raise ValueError("No supported models provided for MyxMatch evaluation.")
+                        raise ValueError(
+                            "No supported models provided for MyxMatch evaluation."
+                        )
 
-                    formatted_models = [model.split("/")[-1] for model in myx_board.models]
+                    formatted_models = [
+                        model.split("/")[-1] for model in myx_board.models
+                    ]
                     job_response = run_myxmatch(
                         myx_board.name, prompt, formatted_models
                     )
 
-                # Handle BENCHMARK task type
                 elif task == EvaluationTask.BENCHMARK:
                     if not benchmark_tasks:
-                        raise ValueError("Benchmark tasks must be specified for BENCHMARK evaluation.")
+                        raise ValueError(
+                            "Benchmark tasks must be specified for BENCHMARK evaluation."
+                        )
 
-                    # Validate and prepare benchmark tasks
                     valid_benchmarks = BenchmarkTask.list_tasks()
-                    invalid_tasks = [bt for bt in benchmark_tasks if bt not in valid_benchmarks]
+                    invalid_tasks = [
+                        bt for bt in benchmark_tasks if bt not in valid_benchmarks
+                    ]
                     if invalid_tasks:
                         raise ValueError(f"Invalid benchmark tasks: {invalid_tasks}")
 
-                    # Filter supported models from the MyxBoard models list
                     supported_models = [
-                        model for model in myx_board.models
+                        model
+                        for model in myx_board.models
                         if model in AvailableModels.list_models()
                     ]
 
                     if not supported_models:
-                        raise ValueError("No supported models provided for benchmarking.")
+                        raise ValueError(
+                            "No supported models provided for benchmarking."
+                        )
 
-                    # Submit the benchmark task
                     job_response = run_benchmark(
                         myx_board.name, supported_models, benchmark_tasks
                     )

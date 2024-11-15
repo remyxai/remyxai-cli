@@ -7,13 +7,15 @@ from datetime import datetime, timezone
 def notify_completion():
     print("Evaluations are done! You can now view the results.")
 
+
 def sanitize_float(value):
     """
     Replace NaN, Infinity, and -Infinity with a valid default value (e.g., None or 0.0).
     """
     if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-        return 0.0  # Replace with 0.0 if you prefer numerical default
+        return 0.0
     return value
+
 
 def format_myxmatch_results_for_storage(
     eval_results: dict, task_name: str, start_time: float, end_time: float
@@ -23,18 +25,15 @@ def format_myxmatch_results_for_storage(
     """
     formatted_results = []
 
-    # Ensure eval_results contains the "models" key
     if not isinstance(eval_results, dict) or "models" not in eval_results:
         logging.error(f"Invalid format for eval_results: {eval_results}")
         return formatted_results
 
-    # Process the models and store their evaluation results
     logging.info(f"Formatting results for task: {task_name}")
     for model_info in eval_results["models"]:
         model_name = model_info.get("model")
         rank = model_info.get("rank")
 
-        # Print intermediate model processing
         logging.info(f"Processing model {model_name} with rank {rank}")
 
         formatted_results.append(
@@ -55,6 +54,7 @@ def format_myxmatch_results_for_storage(
     logging.info(f"Formatted results: {formatted_results}")
     return formatted_results
 
+
 def format_results_for_storage(
     eval_results: dict, task_name: str, start_time: float, end_time: float
 ) -> list:
@@ -62,12 +62,17 @@ def format_results_for_storage(
     Dispatch to the correct formatter based on the task type.
     """
     if task_name == "myxmatch":
-        return format_myxmatch_results_for_storage(eval_results, task_name, start_time, end_time)
+        return format_myxmatch_results_for_storage(
+            eval_results, task_name, start_time, end_time
+        )
     elif task_name == "benchmark":
-        return format_benchmark_results_for_storage(eval_results, task_name, start_time, end_time)
+        return format_benchmark_results_for_storage(
+            eval_results, task_name, start_time, end_time
+        )
     else:
         logging.error(f"Unsupported task type: {task_name}")
         return []
+
 
 def format_benchmark_results_for_storage(
     eval_results: dict, task_name: str, start_time: float, end_time: float
@@ -77,7 +82,6 @@ def format_benchmark_results_for_storage(
     """
     formatted_results = []
 
-    # Ensure eval_results contains the "benchmark" key
     if not isinstance(eval_results, dict) or "benchmark" not in eval_results:
         logging.error(f"Invalid format for eval_results: {eval_results}")
         return formatted_results
@@ -93,13 +97,14 @@ def format_benchmark_results_for_storage(
             logging.warning(f"Skipping entry with missing 'model': {model_eval}")
             continue
 
-        # Sanitize and dynamically extract metrics
         model_results = {
-            key: {k: sanitize_float(v) for k, v in value.items()}
-            if isinstance(value, dict)
-            else sanitize_float(value)
+            key: (
+                {k: sanitize_float(v) for k, v in value.items()}
+                if isinstance(value, dict)
+                else sanitize_float(value)
+            )
             for key, value in model_eval.items()
-            if key != "model"  # Exclude the "model" key itself
+            if key != "model"
         }
 
         formatted_results.append(
@@ -122,6 +127,7 @@ def format_benchmark_results_for_storage(
     logging.info(f"Formatted results: {formatted_results}")
     return formatted_results
 
+
 def _reorder_models_by_results(results: dict, task_name: str) -> list:
     """
     Reorder the models list based on their ranking from the results.
@@ -140,7 +146,6 @@ def _validate_models(models: list, supported_models: list) -> None:
     Validate that all models in `models` are in the supported models list.
     Raise a ValueError if any model is not supported.
     """
-    # Ensure models are valid
     unsupported_models = [model for model in models if model not in supported_models]
 
     if unsupported_models:
@@ -150,13 +155,18 @@ def _validate_models(models: list, supported_models: list) -> None:
         )
     logging.info(f"Validated models: {models}")
 
+
 def get_start_end_times(job_status_response):
     """
     Extract start and end times from job status response.
     """
 
-    start_time = job_status_response.get("start_time", datetime.now(timezone.utc).isoformat())
-    end_time = job_status_response.get("end_time", datetime.now(timezone.utc).isoformat())
+    start_time = job_status_response.get(
+        "start_time", datetime.now(timezone.utc).isoformat()
+    )
+    end_time = job_status_response.get(
+        "end_time", datetime.now(timezone.utc).isoformat()
+    )
     return start_time, end_time
 
 
