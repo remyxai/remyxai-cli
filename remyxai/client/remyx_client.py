@@ -19,7 +19,7 @@ from remyxai.api.evaluations import (
     delete_evaluation,
     EvaluationTask,
     BenchmarkTask,
-    EvaluationSupportedModels
+    AvailableModels
 )
 from remyxai.utils.myxboard import format_results_for_storage, notify_completion
 
@@ -56,7 +56,7 @@ class RemyxAPI:
                     # Filter supported models from the MyxBoard models list
                     supported_models = [
                         model for model in myx_board.models
-                        if model in EvaluationSupportedModels.list_models()
+                        if model in AvailableModels.list_models()
                     ]
 
                     if not supported_models:
@@ -81,7 +81,7 @@ class RemyxAPI:
                     # Filter supported models from the MyxBoard models list
                     supported_models = [
                         model for model in myx_board.models
-                        if model in EvaluationSupportedModels.list_models()
+                        if model in AvailableModels.list_models()
                     ]
 
                     if not supported_models:

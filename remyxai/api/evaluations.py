@@ -5,7 +5,7 @@ from enum import Enum
 from . import BASE_URL, HEADERS
 
 
-class EvaluationSupportedModels(Enum):
+class AvailableModels(Enum):
     PHI_3_MINI_4K_INSTRUCT = "microsoft/Phi-3-mini-4k-instruct"
     BIOMISTRAL_7B = "BioMistral/BioMistral-7B"
     CODELLAMA_7B_INSTRUCT_HF = "codellama/CodeLlama-7b-Instruct-hf"

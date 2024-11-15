@@ -3,7 +3,7 @@ import time
 import logging
 from typing import List, Dict, Optional, Union
 import urllib.parse
-from remyxai.api.evaluations import EvaluationTask, EvaluationSupportedModels, download_evaluation
+from remyxai.api.evaluations import EvaluationTask, AvailableModels, download_evaluation
 from remyxai.api.tasks import get_job_status
 from remyxai.api.myxboard import (
     list_myxboards,
@@ -47,7 +47,7 @@ class MyxBoard:
             self.models = model_repo_ids or []
             self.from_hf_collection = False
 
-        _validate_models(self.models, EvaluationSupportedModels.list_models())
+        _validate_models(self.models, AvailableModels.list_models())
         self.results = {}
         self.job_status = {}
 
