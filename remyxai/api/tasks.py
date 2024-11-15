@@ -39,6 +39,38 @@ def run_myxmatch(name: str, prompt: str, models: list) -> dict:
         logging.error(f"Failed to create MyxMatch task: {response.status_code}")
         return {"error": f"Failed to create MyxMatch task: {response.text}"}
 
+def run_benchmark(name: str, models: list, evals: list) -> dict:
+    """Submit a benchmark task to the server."""
+
+    headers = {"Authorization": HEADERS["Authorization"]}
+
+    models_str = ",".join(models)
+    evals_str = ",".join(evals)
+    encoded_name = urllib.parse.quote(name.replace("/", "--"), safe="")
+
+    # Endpoint URL
+    url = f"{BASE_URL}/task/benchmark"
+
+    payload = {
+        "name": encoded_name,
+        "models": models_str,
+        "evals": evals_str
+    }
+
+    logging.info(f"POST request to {url} with payload: {payload}")
+
+    response = requests.post(url, headers=headers, data=payload)
+
+    if response.status_code == 202:
+        try:
+            return response.json()
+        except (requests.JSONDecodeError, ValueError) as e:
+            logging.error(f"Error decoding JSON response: {e}")
+            return {"error": "Invalid JSON response"}
+    else:
+        logging.error(f"Failed to create benchmark task: {response.status_code}")
+        return {"error": f"Failed to create benchmark task: {response.text}"}
+
 
 def get_job_status(job_name: str) -> dict:
     """
