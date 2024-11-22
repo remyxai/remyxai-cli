@@ -2,8 +2,15 @@ import os
 import shutil
 import requests
 from io import BytesIO
+from functools import lru_cache
 from . import BASE_URL, HEADERS, log_api_response
 
+@lru_cache(maxsize=1)
+def fetch_available_architectures():
+    url = f"{BASE_URL}model/architectures"
+    response = requests.get(url)
+    architectures = response.json()
+    return architectures
 
 def list_models():
     url = f"{BASE_URL}model/list"

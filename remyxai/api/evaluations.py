@@ -2,27 +2,28 @@ import logging
 import requests
 from typing import List
 from enum import Enum
+from remyxai.api.models import fetch_available_architectures
 from . import BASE_URL, HEADERS
 
 
-# More models coming soon
-class AvailableModels(Enum):
-    PHI_3_MINI_4K_INSTRUCT = "microsoft/Phi-3-mini-4k-instruct"
-    BIOMISTRAL_7B = "BioMistral/BioMistral-7B"
-    CODELLAMA_7B_INSTRUCT_HF = "codellama/CodeLlama-7b-Instruct-hf"
-    GORILLA_OPENFUNCTIONS_V2 = "gorilla-llm/gorilla-openfunctions-v2"
-    LLAMA_2_7B_HF = "meta-llama/Llama-2-7b-hf"
-    MISTRAL_7B_INSTRUCT_V0_3 = "mistralai/Mistral-7B-Instruct-v0.3"
-    META_LLAMA_3_8B = "meta-llama/Meta-Llama-3-8B"
-    META_LLAMA_3_8B_INSTRUCT = "meta-llama/Meta-Llama-3-8B-Instruct"
-    QWEN2_1_5B = "Qwen/Qwen2-1.5B"
-    QWEN2_1_5B_INSTRUCT = "Qwen/Qwen2-1.5B-Instruct"
+class AvailableArchitectures:
+    """
+    Class to interact with the list of available model architectures.
+    """
+    def __init__(self):
+        self.architectures = self._load_architectures()
 
-    @classmethod
-    def list_models(cls) -> List[str]:
-        """Return a list of supported model names as strings."""
-        return [model.value for model in cls]
+    def _load_architectures(self):
+        architectures = fetch_available_architectures()
+        if not architectures:
+            logging.warning("Using empty model list due to fetch error.")
+        return architectures
 
+    def list_architectures(self):
+        return self.architectures
+
+    def is_architecture_available(self, architecture_name):
+        return architecture_name in self.architectures
 
 class EvaluationTask(Enum):
     MYXMATCH = "myxmatch"

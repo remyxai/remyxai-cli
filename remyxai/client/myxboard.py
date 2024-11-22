@@ -14,10 +14,10 @@ from remyxai.api.myxboard import (
 )
 from remyxai.utils.myxboard import (
     _reorder_models_by_results,
-    _validate_models,
     add_code_snippet_to_card,
     format_results_for_storage,
 )
+from remyxai.utils.validators import _validate_models
 import pandas as pd
 from datasets import Dataset, DatasetDict
 from huggingface_hub import (
@@ -47,7 +47,7 @@ class MyxBoard:
             self.models = model_repo_ids or []
             self.from_hf_collection = False
 
-        _validate_models(self.models, AvailableModels.list_models())
+        _validate_models(self.models)
         self.results = {}
         self.job_status = {}
 
