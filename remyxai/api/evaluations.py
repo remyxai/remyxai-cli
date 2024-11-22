@@ -13,7 +13,7 @@ class AvailableArchitectures:
         self.architectures = self._load_architectures()
 
     def _load_architectures(self):
-        architectures = fetch_available_architectures()
+        architectures = fetch_available_architectures()["message"]
         if not architectures:
             logging.warning("Using empty model list due to fetch error.")
         return architectures
