@@ -5,7 +5,6 @@ from enum import Enum
 from remyxai.api.models import fetch_available_architectures
 from . import BASE_URL, HEADERS
 
-
 class AvailableArchitectures:
     """
     Class to interact with the list of available model architectures.
@@ -24,6 +23,23 @@ class AvailableArchitectures:
 
     def is_architecture_available(self, architecture_name):
         return architecture_name in self.architectures
+
+class AvailableModels(Enum):
+    PHI_3_MINI_4K_INSTRUCT = "microsoft/Phi-3-mini-4k-instruct"
+    BIOMISTRAL_7B = "BioMistral/BioMistral-7B"
+    CODELLAMA_7B_INSTRUCT_HF = "codellama/CodeLlama-7b-Instruct-hf"
+    GORILLA_OPENFUNCTIONS_V2 = "gorilla-llm/gorilla-openfunctions-v2"
+    LLAMA_2_7B_HF = "meta-llama/Llama-2-7b-hf"
+    MISTRAL_7B_INSTRUCT_V0_3 = "mistralai/Mistral-7B-Instruct-v0.3"
+    META_LLAMA_3_8B = "meta-llama/Meta-Llama-3-8B"
+    META_LLAMA_3_8B_INSTRUCT = "meta-llama/Meta-Llama-3-8B-Instruct"
+    QWEN2_1_5B = "Qwen/Qwen2-1.5B"
+    QWEN2_1_5B_INSTRUCT = "Qwen/Qwen2-1.5B-Instruct"
+
+    @classmethod
+    def list_models(cls) -> List[str]:
+        """Return a list of supported model names as strings."""
+        return [model.value for model in cls]
 
 class EvaluationTask(Enum):
     MYXMATCH = "myxmatch"

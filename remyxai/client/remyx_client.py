@@ -19,9 +19,10 @@ from remyxai.api.evaluations import (
     delete_evaluation,
     EvaluationTask,
     BenchmarkTask,
-    AvailableModels,
+    AvailableModels
 )
 from remyxai.utils.myxboard import format_results_for_storage, notify_completion
+from remyxai.utils.validators import _validate_models
 
 
 class RemyxAPI:
@@ -52,22 +53,10 @@ class RemyxAPI:
                     if not prompt:
                         raise ValueError(f"Task '{task_name}' requires a prompt.")
 
-                    supported_models = [
-                        model
-                        for model in myx_board.models
-                        if model in AvailableModels.list_models()
-                    ]
+                    _validate_models(myx_board.models)
 
-                    if not supported_models:
-                        raise ValueError(
-                            "No supported models provided for MyxMatch evaluation."
-                        )
-
-                    formatted_models = [
-                        model.split("/")[-1] for model in myx_board.models
-                    ]
                     job_response = run_myxmatch(
-                        myx_board.name, prompt, formatted_models
+                        myx_board.name, prompt, myx_board.models
                     )
 
                 elif task == EvaluationTask.BENCHMARK:

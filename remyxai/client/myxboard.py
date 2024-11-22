@@ -3,7 +3,7 @@ import time
 import logging
 from typing import List, Dict, Optional, Union
 import urllib.parse
-from remyxai.api.evaluations import EvaluationTask, AvailableModels, download_evaluation
+from remyxai.api.evaluations import EvaluationTask, download_evaluation
 from remyxai.api.tasks import get_job_status
 from remyxai.api.myxboard import (
     list_myxboards,

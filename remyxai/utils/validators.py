@@ -4,7 +4,7 @@ import logging
 import requests
 from typing import List, Tuple, Optional
 from huggingface_hub import HfFolder
-from remyxai.api.models import fetch_supported_architectures
+from remyxai.api.models import fetch_available_architectures
 
 def get_hf_token() -> Optional[str]:
     """
@@ -45,7 +45,7 @@ def validate_model_architecture(
                 return True, f"Model '{model_id}' matches architecture: {architecture}"
 
         return False, (
-            f"Model '{model_id}' does not match any supported architectures: {supported_archs}"
+            f"Model '{model_id}' does not match any supported architectures: {', '.join(supported_archs)}"
         )
 
     except requests.exceptions.HTTPError as e:
@@ -117,7 +117,7 @@ def _validate_models(
     Automatically fetches the user's HF token from the environment.
     """
     # Fetch the supported architectures once
-    supported_archs = fetch_supported_architectures()
+    supported_archs = fetch_available_architectures()["message"]
     if not supported_archs:
         raise ValueError("Failed to fetch supported architectures from server.")
 
@@ -141,3 +141,4 @@ def _validate_models(
     if invalid_models:
         error_messages = "\n".join(reasons)
         raise ValueError(f"The following models failed validation:\n{error_messages}")
+
