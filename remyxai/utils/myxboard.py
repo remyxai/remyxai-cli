@@ -141,21 +141,6 @@ def _reorder_models_by_results(results: dict, task_name: str) -> list:
     return [model_id for model_id, _ in ranked_models]
 
 
-def _validate_models(models: list, supported_models: list) -> None:
-    """
-    Validate that all models in `models` are in the supported models list.
-    Raise a ValueError if any model is not supported.
-    """
-    unsupported_models = [model for model in models if model not in supported_models]
-
-    if unsupported_models:
-        raise ValueError(
-            f"The following models are not supported: {unsupported_models}. "
-            f"Supported models: {supported_models}"
-        )
-    logging.info(f"Validated models: {models}")
-
-
 def get_start_end_times(job_status_response):
     """
     Extract start and end times from job status response.
