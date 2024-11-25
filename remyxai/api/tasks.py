@@ -7,24 +7,14 @@ from typing import Optional
 
 def run_myxmatch(name: str, prompt: str, models: list) -> dict:
     """Submit a MyxMatch task to the server."""
-    mapped_models = []
-    for model in models:
-        if "/" in model:
-            mapped_model = model.split("/")[1]
-        else:
-            mapped_model = model
+    headers = {"Authorization": HEADERS["Authorization"]}
+    models_str = ",".join(models)
 
-        mapped_models.append(mapped_model)
-
-    models_str = ",".join(mapped_models)
-
-    encoded_name = urllib.parse.quote(name.replace("/", "--"), safe="")
-    encoded_prompt = urllib.parse.quote(prompt, safe="")
-
-    url = f"{BASE_URL}/task/myxmatch/{encoded_name}/{encoded_prompt}/{models_str}"
+    url = f"{BASE_URL}/task/myxmatch"
     logging.info(f"POST request to {url}")
+    payload = {"name": name, "models": models_str, "prompt": prompt}
 
-    response = requests.post(url, headers=HEADERS)
+    response = requests.post(url, headers=headers, data=payload)
 
     if response.status_code == 202:
         try:

@@ -2,10 +2,28 @@ import logging
 import requests
 from typing import List
 from enum import Enum
+from remyxai.api.models import fetch_available_architectures
 from . import BASE_URL, HEADERS
 
+class AvailableArchitectures:
+    """
+    Class to interact with the list of available model architectures.
+    """
+    def __init__(self):
+        self.architectures = self._load_architectures()
 
-# More models coming soon
+    def _load_architectures(self):
+        architectures = fetch_available_architectures()["message"]
+        if not architectures:
+            logging.warning("Using empty model list due to fetch error.")
+        return architectures
+
+    def list_architectures(self):
+        return self.architectures
+
+    def is_architecture_available(self, architecture_name):
+        return architecture_name in self.architectures
+
 class AvailableModels(Enum):
     PHI_3_MINI_4K_INSTRUCT = "microsoft/Phi-3-mini-4k-instruct"
     BIOMISTRAL_7B = "BioMistral/BioMistral-7B"
@@ -22,7 +40,6 @@ class AvailableModels(Enum):
     def list_models(cls) -> List[str]:
         """Return a list of supported model names as strings."""
         return [model.value for model in cls]
-
 
 class EvaluationTask(Enum):
     MYXMATCH = "myxmatch"
