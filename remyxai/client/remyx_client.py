@@ -19,7 +19,6 @@ from remyxai.api.evaluations import (
     delete_evaluation,
     EvaluationTask,
     BenchmarkTask,
-    AvailableModels
 )
 from remyxai.utils.myxboard import format_results_for_storage, notify_completion
 from remyxai.utils.validators import _validate_models
@@ -49,11 +48,11 @@ class RemyxAPI:
             for task in tasks:
                 task_name = task.value
 
+                _validate_models(myx_board.models)
+
                 if task == EvaluationTask.MYXMATCH:
                     if not prompt:
                         raise ValueError(f"Task '{task_name}' requires a prompt.")
-
-                    _validate_models(myx_board.models)
 
                     job_response = run_myxmatch(
                         myx_board.name, prompt, myx_board.models
@@ -72,19 +71,8 @@ class RemyxAPI:
                     if invalid_tasks:
                         raise ValueError(f"Invalid benchmark tasks: {invalid_tasks}")
 
-                    supported_models = [
-                        model
-                        for model in myx_board.models
-                        if model in AvailableModels.list_models()
-                    ]
-
-                    if not supported_models:
-                        raise ValueError(
-                            "No supported models provided for benchmarking."
-                        )
-
                     job_response = run_benchmark(
-                        myx_board.name, supported_models, benchmark_tasks
+                        myx_board.name, myx_board.models, benchmark_tasks
                     )
 
                 job_name = job_response.get("job_name")
