@@ -280,12 +280,12 @@ class MyxBoard:
                 if not token:
                     logging.error("Missing Hugging Face token - Please authenticate with: huggingface_cli login")
                     raise
-                user_info = whoami(token=user_hf_token)
+                user_info = whoami(token=token)
                 username = user_info.get("name")
                 if not username:
                     logging.error("Could not retrieve username from Hugging Face token.")
                     raise
-                dataset_name = f"{username}/{dataset_name}"
+                dataset_name = f"{username}/{self._sanitized_name}"
 
             self._push_dataset_to_hf(dataset_name, dataset_dict)
 
