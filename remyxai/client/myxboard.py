@@ -26,6 +26,7 @@ from huggingface_hub import (
     add_collection_item,
     HfFolder,
     DatasetCard,
+    whoami
 )
 
 
@@ -271,10 +272,27 @@ class MyxBoard:
 
         try:
             dataset_dict = self._create_dataset_from_results()
-            dataset_name = self.hf_collection_name.rsplit("-", 1)[0]
+            if self.hf_collection_name:
+                dataset_name = self.hf_collection_name.rsplit("-", 1)[0]
+            else:
+                # Check if the Hugging Face token is missing
+                token = HfFolder.get_token() or os.getenv("HF_TOKEN")
+                if not token:
+                    logging.error("Missing Hugging Face token - Please authenticate with: huggingface_cli login")
+                    raise
+                user_info = whoami(token=user_hf_token)
+                username = user_info.get("name")
+                if not username:
+                    logging.error("Could not retrieve username from Hugging Face token.")
+                    raise
+                dataset_name = f"{username}/{dataset_name}"
 
             self._push_dataset_to_hf(dataset_name, dataset_dict)
-            self._add_dataset_to_collection(dataset_name)
+
+            # optionally, add dataset to collection
+            if self.hf_collection_name:
+                self._add_dataset_to_collection(dataset_name)
+
             self._tag_dataset(dataset_name)
         except Exception as e:
             logging.error(f"Error pushing to Hugging Face: {e}")
