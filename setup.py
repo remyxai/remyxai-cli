@@ -19,6 +19,9 @@ setup(
         "huggingface_hub",
         "datasets",
         "pandas",
+        "click",
+        "gevent",
+        "geventhttpclient",
     ],
     entry_points={
         "console_scripts": [
