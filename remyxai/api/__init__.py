@@ -1,3 +1,4 @@
+# remyxai/api/__init__.py
 import os
 import logging
 
@@ -6,7 +7,8 @@ if not REMYXAI_API_KEY:
     logging.error("REMYXAI_API_KEY not found in environment variables.")
     raise ValueError("REMYXAI_API_KEY not found. Please set it with your API key.")
 else:
-    logging.info(f"Using API Key: {REMYXAI_API_KEY}")  # Log the key for debugging (only in dev)
+    # Only log first 8 characters for security
+    logging.info(f"Using API Key: {REMYXAI_API_KEY[:8]}...")
 
 BASE_URL = "https://engine.remyx.ai/api/v1.0"
 
@@ -21,4 +23,3 @@ def log_api_response(response):
         logging.debug(f"API call successful: {response.url}, Status: {response.status_code}")
     else:
         logging.error(f"API call failed: {response.url}, Status: {response.status_code}, Response: {response.text}")
-

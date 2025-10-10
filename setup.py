@@ -6,7 +6,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.1.9",
+    version="0.2.0",
     packages=find_packages(include=["remyxai", "remyxai.*"]),
     install_requires=[
         "numpy",
