@@ -1,18 +1,24 @@
-# remyxai/cli/commands.py
+"""
+RemyxAI CLI - Main command interface
+All commands use "search" convention for asset discovery
+"""
 import click
 from remyxai.cli.deployment_actions import handle_deployment_action
 from remyxai.cli.evaluation_actions import handle_model_action, handle_evaluation_action
 from remyxai.cli.dataset_actions import handle_dataset_action
-from remyxai.cli.paper_actions import (
-    handle_paper_search,
-    handle_paper_info,
-    handle_paper_list,
-    handle_paper_stats,
+from remyxai.cli.search_actions import (
+    handle_search,
+    handle_info,
+    handle_list,
+    handle_stats,
 )
 
 @click.group()
 def cli():
-    """RemyxAI CLI."""
+    """
+    RemyxAI CLI - ExperimentOps for AI Development
+    
+    """
     pass
 
 
@@ -69,36 +75,34 @@ def dataset(action, dataset_name=None):
 
 
 @cli.group()
-def papers():
-    """Manage containerized research papers for AG2 integration."""
+def search():
+    """
+    Search and discover research assets (papers + Docker images).
+    
+    Find research papers, containerized implementations, and related assets.
+    """
     pass
 
 
-@papers.command("search")
-@click.argument("query")
+@search.command("query")
+@click.argument("query_text")
 @click.option("--max-results", "-n", default=10, help="Maximum results to return")
-@click.option("--category", "-c", multiple=True, help="Filter by arXiv category (can specify multiple)")
+@click.option("--category", "-c", multiple=True, help="Filter by arXiv category")
 @click.option("--docker/--no-docker", default=None, help="Filter by Docker availability")
-@click.option("--all", "search_all", is_flag=True, help="Search all papers (default)")
-def search_papers_cmd(query, max_results, category, docker, search_all):
+def search_query_cmd(query_text, max_results, category, docker):
     """
-    Search for research papers in the Remyx catalog.
-    
-    By default, searches ALL papers. Use --docker or --no-docker to filter.
+    Search for research assets in the Remyx catalog.
     
     Examples:
     
-      # Search all papers
-      remyxai papers search "vision transformers"
+      # Search all assets
+      remyxai search query "data synthesis"
       
-      # Search only papers with Docker images
-      remyxai papers search "vision transformers" --docker
+      # Search only assets with Docker images
+      remyxai search query "data synthesis" --docker
       
-      # Search only papers without Docker images
-      remyxai papers search "vision transformers" --no-docker
-      
-      # Search with multiple filters
-      remyxai papers search "machine learning" --docker -c cs.LG -n 5
+      # Search with filters
+      remyxai search query "machine learning" --docker -c cs.LG -n 5
     """
     try:
         categories = list(category) if category else None
@@ -108,71 +112,80 @@ def search_papers_cmd(query, max_results, category, docker, search_all):
             has_docker_filter = True
         elif docker is False:
             has_docker_filter = False
-        # If docker is None (not specified), has_docker_filter stays None (search all)
         
-        handle_paper_search(
-            query, 
+        handle_search(
+            query_text, 
             max_results=max_results, 
             categories=categories,
             has_docker=has_docker_filter
         )
     except Exception as e:
-        click.echo(f"❌ Error searching papers: {e}", err=True)
+        click.echo(f"❌ Error searching assets: {e}", err=True)
 
-@papers.command("info")
+
+@search.command("info")
 @click.argument("arxiv_id")
 @click.option("--format", "-f", default="text", type=click.Choice(["text", "json"]), 
-              help="Output format (text or json)")
-def paper_info_cmd(arxiv_id, format):
+              help="Output format")
+def info_cmd(arxiv_id, format):
     """
-    Get detailed information about a specific paper.
+    Get detailed information about a specific asset.
     
     Examples:
     
-      remyxai papers info 2010.11929v2
-      
-      remyxai papers info 2010.11929v2 --format json
+      remyxai search info 2010.11929v2
+      remyxai search info 2010.11929v2 --format json
     """
     try:
-        handle_paper_info(arxiv_id, output_format=format)
+        handle_info(arxiv_id, output_format=format)
     except Exception as e:
-        click.echo(f"❌ Error getting paper info: {e}", err=True)
+        click.echo(f"❌ Error getting asset info: {e}", err=True)
 
 
-@papers.command("list")
-@click.option("--limit", "-n", default=20, help="Number of papers to list")
+@search.command("list")
+@click.option("--limit", "-n", default=20, help="Number of assets to list")
 @click.option("--offset", "-o", default=0, help="Pagination offset")
 @click.option("--category", "-c", multiple=True, help="Filter by arXiv category")
-def list_papers_cmd(limit, offset, category):
+@click.option("--docker/--no-docker", default=None, help="Filter by Docker availability")
+def list_cmd(limit, offset, category, docker):
     """
-    List recently containerized papers.
+    List recently added research assets.
     
     Examples:
     
-      remyxai papers list
-      
-      remyxai papers list -n 10
-      
-      remyxai papers list -c cs.CV --offset 20
+      remyxai search list
+      remyxai search list --docker
+      remyxai search list -n 10 -c cs.CV
     """
     try:
         categories = list(category) if category else None
-        handle_paper_list(limit=limit, offset=offset, categories=categories)
+        
+        has_docker_filter = None
+        if docker is True:
+            has_docker_filter = True
+        elif docker is False:
+            has_docker_filter = False
+        
+        handle_list(
+            limit=limit, 
+            offset=offset, 
+            categories=categories,
+            has_docker=has_docker_filter
+        )
     except Exception as e:
-        click.echo(f"❌ Error listing papers: {e}", err=True)
+        click.echo(f"❌ Error listing assets: {e}", err=True)
 
 
-@papers.command("stats")
+@search.command("stats")
 def stats_cmd():
     """
-    Show statistics about available papers.
+    Show statistics about available research assets.
     
     Example:
-    
-      remyxai papers stats
+      remyxai search stats
     """
     try:
-        handle_paper_stats()
+        handle_stats()
     except Exception as e:
         click.echo(f"❌ Error getting stats: {e}", err=True)
 
