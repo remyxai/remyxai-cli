@@ -1,14 +1,16 @@
 import logging
 import requests
-from typing import List
+from typing import List, Optional
 from enum import Enum
 from remyxai.api.models import fetch_available_architectures
-from . import BASE_URL, HEADERS
+from . import BASE_URL, HEADERS, get_headers
+
 
 class AvailableArchitectures:
     """
     Class to interact with the list of available model architectures.
     """
+
     def __init__(self):
         self.architectures = self._load_architectures()
 
@@ -23,6 +25,7 @@ class AvailableArchitectures:
 
     def is_architecture_available(self, architecture_name):
         return architecture_name in self.architectures
+
 
 class EvaluationTask(Enum):
     MYXMATCH = "myxmatch"
@@ -66,11 +69,18 @@ class BenchmarkTask(Enum):
         return [task.value for task in cls]
 
 
-def list_evaluations() -> list:
+def _resolve_headers(api_key: Optional[str] = None) -> dict:
+    """Return headers using explicit key if provided, else module-level default."""
+    if api_key:
+        return get_headers(api_key)
+    return HEADERS
+
+
+def list_evaluations(api_key: Optional[str] = None) -> list:
     """List all evaluations from the server."""
     url = f"{BASE_URL}/evaluation/list"
     logging.info(f"GET request to {url}")
-    response = requests.get(url, headers=HEADERS)
+    response = requests.get(url, headers=_resolve_headers(api_key))
 
     if response.status_code == 200:
         try:
@@ -83,12 +93,14 @@ def list_evaluations() -> list:
         return {"error": f"Failed to fetch evaluations: {response.text}"}
 
 
-def download_evaluation(task_name: str, eval_name: str) -> dict:
+def download_evaluation(
+    task_name: str, eval_name: str, api_key: Optional[str] = None
+) -> dict:
     """Download evaluation results using the task name and eval name."""
     url = f"{BASE_URL}/evaluation/download/{task_name}/{eval_name}"
     logging.info(f"GET request to {url}")
 
-    response = requests.get(url, headers=HEADERS)
+    response = requests.get(url, headers=_resolve_headers(api_key))
 
     if response.status_code == 200:
         try:
@@ -99,15 +111,19 @@ def download_evaluation(task_name: str, eval_name: str) -> dict:
             logging.error(f"Error decoding JSON response: {e}")
             return {"error": "Invalid JSON response"}
     else:
-        logging.error(f"Failed to download evaluation result: {response.status_code}")
+        logging.error(
+            f"Failed to download evaluation result: {response.status_code}"
+        )
         return {"error": f"Failed to download evaluation result: {response.text}"}
 
 
-def delete_evaluation(eval_type: str, eval_name: str) -> dict:
+def delete_evaluation(
+    eval_type: str, eval_name: str, api_key: Optional[str] = None
+) -> dict:
     """Delete an evaluation from the server."""
     url = f"{BASE_URL}/evaluation/delete/{eval_type}/{eval_name}"
     logging.info(f"POST request to {url}")
-    response = requests.post(url, headers=HEADERS)
+    response = requests.post(url, headers=_resolve_headers(api_key))
 
     if response.status_code == 200:
         try:

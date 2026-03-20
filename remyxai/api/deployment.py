@@ -3,12 +3,24 @@ import shutil
 import tempfile
 import subprocess
 import requests
-from . import BASE_URL, HEADERS, log_api_response
+from typing import Optional
+from . import BASE_URL, HEADERS, get_headers, log_api_response
 
 
-def download_deployment_package(model_name, output_path):
+def _resolve_headers(api_key: Optional[str] = None) -> dict:
+    """Return headers using explicit key if provided, else module-level default."""
+    if api_key:
+        return get_headers(api_key)
+    return HEADERS
+
+
+def download_deployment_package(
+    model_name, output_path, api_key: Optional[str] = None
+):
     url = f"{BASE_URL}deployment/download/{model_name}"
-    response = requests.get(url, headers=HEADERS, stream=True)
+    response = requests.get(
+        url, headers=_resolve_headers(api_key), stream=True
+    )
     if response.status_code == 200:
         with open(output_path, "wb") as f:
             shutil.copyfileobj(response.raw, f)
@@ -17,16 +29,18 @@ def download_deployment_package(model_name, output_path):
         return None
 
 
-def deploy_model(model_name, action="up"):
+def deploy_model(model_name, action="up", api_key: Optional[str] = None):
     with tempfile.TemporaryDirectory() as tmpdirname:
         model_dir = os.path.join(tmpdirname, model_name)
         compose_file_path = os.path.join(model_dir, "docker-compose.yml")
         zip_path = os.path.join(tmpdirname, f"{model_name}_deployment_package.zip")
 
         if action == "up":
-            if download_deployment_package(model_name, zip_path):
+            if download_deployment_package(model_name, zip_path, api_key=api_key):
                 os.makedirs(model_dir, exist_ok=True)
-                subprocess.run(["unzip", "-o", zip_path, "-d", model_dir], check=True)
+                subprocess.run(
+                    ["unzip", "-o", zip_path, "-d", model_dir], check=True
+                )
                 if not os.path.exists(compose_file_path):
                     with open(compose_file_path, "w") as f:
                         f.write(
@@ -49,7 +63,9 @@ services:
                         """
                         )
                 os.chdir(model_dir)
-                subprocess.run(["docker", "compose", "up", "--build", "-d"], check=True)
+                subprocess.run(
+                    ["docker", "compose", "up", "--build", "-d"], check=True
+                )
         elif action == "down":
             if os.path.exists(compose_file_path):
                 os.chdir(model_dir)
