@@ -1,16 +1,28 @@
 import logging
 import requests
 import urllib.parse
-from . import BASE_URL, HEADERS, log_api_response
+from typing import Optional
+from . import BASE_URL, HEADERS, get_headers, log_api_response
 
 
-def store_myxboard(name: str, models: list, results: dict = None) -> dict:
+def _resolve_headers(api_key: Optional[str] = None) -> dict:
+    """Return headers using explicit key if provided, else module-level default."""
+    if api_key:
+        return get_headers(api_key)
+    return HEADERS
+
+
+def store_myxboard(
+    name: str, models: list, results: dict = None, api_key: Optional[str] = None
+) -> dict:
     """Create and store a new MyxBoard on the server."""
     url = f"{BASE_URL}/myxboard/store"
     payload = {"name": name, "models": models, "results": results or None}
-    response = requests.post(url, json=payload, headers=HEADERS)  # POST request
+    response = requests.post(
+        url, json=payload, headers=_resolve_headers(api_key)
+    )
 
-    log_api_response(response)  # Log the response
+    log_api_response(response)
 
     if response.status_code == 201:
         return response.json()
@@ -19,12 +31,12 @@ def store_myxboard(name: str, models: list, results: dict = None) -> dict:
         return {"error": f"Failed to create MyxBoard: {response.text}"}
 
 
-def list_myxboards() -> list:
+def list_myxboards(api_key: Optional[str] = None) -> list:
     """List all MyxBoards from the server."""
     url = f"{BASE_URL}/myxboard/list"
-    response = requests.get(url, headers=HEADERS)  # GET request
+    response = requests.get(url, headers=_resolve_headers(api_key))
 
-    log_api_response(response)  # Log the response
+    log_api_response(response)
 
     if response.status_code == 200:
         return response.json().get("message", [])
@@ -39,6 +51,7 @@ def update_myxboard(
     results: dict = None,
     from_hf_collection: bool = False,
     hf_collection_name: str = None,
+    api_key: Optional[str] = None,
 ) -> dict:
     """Update an existing MyxBoard on the server."""
     url = f"{BASE_URL}/myxboard/update/{myxboard_id}"
@@ -49,7 +62,9 @@ def update_myxboard(
         "hf_collection_name": hf_collection_name,
     }
     logging.info(f"PUT request to {url} with payload: {payload}")
-    response = requests.put(url, json=payload, headers=HEADERS)
+    response = requests.put(
+        url, json=payload, headers=_resolve_headers(api_key)
+    )
 
     if response.status_code == 200:
         try:
@@ -62,11 +77,11 @@ def update_myxboard(
         return {"error": f"Failed to update MyxBoard: {response.text}"}
 
 
-def delete_myxboard(myxboard_id: str) -> dict:
+def delete_myxboard(myxboard_id: str, api_key: Optional[str] = None) -> dict:
     """Delete an existing MyxBoard from the server."""
     url = f"{BASE_URL}/myxboard/delete/{myxboard_id}"
     logging.info(f"DELETE request to {url}")
-    response = requests.delete(url, headers=HEADERS)
+    response = requests.delete(url, headers=_resolve_headers(api_key))
 
     if response.status_code == 200:
         try:
@@ -79,11 +94,13 @@ def delete_myxboard(myxboard_id: str) -> dict:
         return {"error": f"Failed to delete MyxBoard: {response.text}"}
 
 
-def download_myxboard(myxboard_name: str) -> dict:
+def download_myxboard(
+    myxboard_name: str, api_key: Optional[str] = None
+) -> dict:
     """Download a MyxBoard's results using the name."""
     url = f"{BASE_URL}/myxboard/download/{myxboard_name}"
     logging.info(f"GET request to {url}")
-    response = requests.get(url, headers=HEADERS)
+    response = requests.get(url, headers=_resolve_headers(api_key))
 
     if response.status_code == 200:
         try:

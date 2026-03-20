@@ -1,13 +1,28 @@
 import logging
 import requests
 import urllib.parse
-from . import BASE_URL, HEADERS, log_api_response
 from typing import Optional
+from . import BASE_URL, HEADERS, get_headers, log_api_response
 
 
-def run_myxmatch(name: str, prompt: str, models: list) -> dict:
+def _resolve_headers(api_key: Optional[str] = None) -> dict:
+    """Return headers using explicit key if provided, else module-level default."""
+    if api_key:
+        return get_headers(api_key)
+    return HEADERS
+
+
+def _resolve_auth_only(api_key: Optional[str] = None) -> dict:
+    """Return auth-only headers (no Content-Type) for form-data requests."""
+    headers = _resolve_headers(api_key)
+    return {"Authorization": headers["Authorization"]}
+
+
+def run_myxmatch(
+    name: str, prompt: str, models: list, api_key: Optional[str] = None
+) -> dict:
     """Submit a MyxMatch task to the server."""
-    headers = {"Authorization": HEADERS["Authorization"]}
+    headers = _resolve_auth_only(api_key)
     models_str = ",".join(models)
 
     url = f"{BASE_URL}/task/myxmatch"
@@ -27,10 +42,11 @@ def run_myxmatch(name: str, prompt: str, models: list) -> dict:
         return {"error": f"Failed to create MyxMatch task: {response.text}"}
 
 
-def run_benchmark(name: str, models: list, evals: list) -> dict:
+def run_benchmark(
+    name: str, models: list, evals: list, api_key: Optional[str] = None
+) -> dict:
     """Submit a benchmark task to the server."""
-
-    headers = {"Authorization": HEADERS["Authorization"]}
+    headers = _resolve_auth_only(api_key)
 
     models_str = ",".join(models)
     evals_str = ",".join(evals)
@@ -55,18 +71,19 @@ def run_benchmark(name: str, models: list, evals: list) -> dict:
         return {"error": f"Failed to create benchmark task: {response.text}"}
 
 
-def get_job_status(job_name: str) -> dict:
+def get_job_status(job_name: str, api_key: Optional[str] = None) -> dict:
     """
     Get the status of a specific job by job name.
 
     :param job_name: The name of the job to check.
+    :param api_key: Optional explicit API key.
     :return: A dictionary containing the status of the job.
     """
     url = f"{BASE_URL}/task/job-status/{job_name}"
     logging.info(f"GET request to {url}")
 
     try:
-        response = requests.get(url, headers=HEADERS)
+        response = requests.get(url, headers=_resolve_headers(api_key))
         logging.debug(f"Raw response from server: {response.text}")
 
         response.raise_for_status()
@@ -83,25 +100,37 @@ def get_job_status(job_name: str) -> dict:
 
 
 def train_classifier(
-    model_name: str, labels: list, model_selector: str, hf_dataset=None
+    model_name: str,
+    labels: list,
+    model_selector: str,
+    hf_dataset=None,
+    api_key: Optional[str] = None,
 ):
     url = f"{BASE_URL}task/classify/{model_name}/{','.join(labels)}/{model_selector}"
     params = {"hf_dataset": hf_dataset} if hf_dataset else None
-    response = requests.post(url, headers=HEADERS, params=params)
+    response = requests.post(url, headers=_resolve_headers(api_key), params=params)
     return response.json()
 
 
-def train_detector(model_name: str, labels: list, model_selector: str, hf_dataset=None):
+def train_detector(
+    model_name: str,
+    labels: list,
+    model_selector: str,
+    hf_dataset=None,
+    api_key: Optional[str] = None,
+):
     url = f"{BASE_URL}task/detect/{model_name}/{','.join(labels)}/{model_selector}"
     params = {"hf_dataset": hf_dataset} if hf_dataset else None
-    response = requests.post(url, headers=HEADERS, params=params)
+    response = requests.post(url, headers=_resolve_headers(api_key), params=params)
     return response.json()
 
 
-def train_generator(model_name: str, hf_dataset: str):
+def train_generator(
+    model_name: str, hf_dataset: str, api_key: Optional[str] = None
+):
     url = f"{BASE_URL}task/generate/{model_name}"
     params = {"hf_dataset": hf_dataset}
-    response = requests.post(url, headers=HEADERS, params=params)
+    response = requests.post(url, headers=_resolve_headers(api_key), params=params)
     return response.json()
 
 
@@ -110,21 +139,15 @@ def run_datacomposer(
     num_samples: int,
     context: Optional[str] = None,
     dataset_file: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> dict:
     """
-    Submit a Data Composer task to the server. Supports file upload, Hugging Face dataset, or text prompt.
-    Args:
-        dataset_name (str): The name of the dataset to compose or extend.
-        num_samples (int): The number of samples to create.
-        context (Optional[str]): The context, which could be a Hugging Face dataset or a text prompt.
-        dataset_file (Optional[str]): Path to the dataset file to upload, if any.
-    Returns:
-        dict: The server's response.
+    Submit a Data Composer task to the server.
     """
     url = (
         f"{BASE_URL}/task/datacomposer/{urllib.parse.quote(dataset_name)}/{num_samples}"
     )
-    headers = {"Authorization": HEADERS["Authorization"]}
+    headers = _resolve_auth_only(api_key)
     logging.info(f"POST request to {url}")
     data = {}
     files = None
