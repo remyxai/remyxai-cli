@@ -15,12 +15,14 @@ setup(
         "pillow",
         "requests",
         "tqdm",
-        "tritonclient[all]",
         "huggingface_hub",
         "datasets",
         "pandas",
         "click",
     ],
+    extras_require={
+    "triton": ["tritonclient[all]"],
+    },
     entry_points={
         "console_scripts": [
             "remyxai=remyxai.cli.commands:cli",
