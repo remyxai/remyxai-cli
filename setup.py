@@ -19,6 +19,7 @@ setup(
         "huggingface_hub",
         "datasets",
         "pandas",
+        "click",
     ],
     entry_points={
         "console_scripts": [
