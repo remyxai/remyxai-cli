@@ -20,8 +20,6 @@ setup(
         "datasets",
         "pandas",
         "click",
-        "gevent",
-        "geventhttpclient",
     ],
     entry_points={
         "console_scripts": [
