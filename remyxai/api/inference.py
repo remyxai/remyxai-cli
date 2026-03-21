@@ -1,9 +1,20 @@
 import time
 import numpy as np
-from tritonclient.http import InferenceServerClient, InferInput, InferRequestedOutput
 
 
 def run_inference(model_name, prompt, server_url="localhost:8000", model_version="1"):
+    # Lazy import — tritonclient is an optional extra (pip install remyxai[triton]).
+    # Keeping it here rather than at module level means everything that imports
+    # remyxai.api (including remyx_client, commands, and the test suite) works
+    # without tritonclient installed.
+    try:
+        from tritonclient.http import InferenceServerClient, InferInput, InferRequestedOutput
+    except ImportError:
+        raise ImportError(
+            "tritonclient is required for inference. "
+            "Install it with: pip install remyxai[triton]"
+        )
+
     triton_client = InferenceServerClient(url=server_url, verbose=False)
     prompt_np = np.array([prompt.encode("utf-8")], dtype=object)
     prompt_in = InferInput(name="PROMPT", shape=[1], datatype="BYTES")
