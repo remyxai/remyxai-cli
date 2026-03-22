@@ -1,4 +1,6 @@
 """
+remyxai/cli/recommendation_actions.py
+
 CLI action handlers for paper recommendations.
 Called by the `remyxai papers` command group in commands.py.
 
@@ -53,9 +55,10 @@ def _fmt_authors(authors: List[str], max_n: int = 3) -> str:
     return ", ".join(authors[:max_n]) + " et al."
 
 
-def _clip(text: str, limit: int = 120) -> str:
-    """Clip text at a word boundary and append ellipsis if truncated."""
-    if len(text) <= limit:
+def _clip(text: str, limit: int = 120, full: bool = False) -> str:
+    """Clip text at a word boundary and append ellipsis if truncated.
+    Pass full=True to return the complete text without truncation."""
+    if full or len(text) <= limit:
         return text
     clipped = text[:limit].rstrip()
     last_space = clipped.rfind(" ")
@@ -63,10 +66,11 @@ def _clip(text: str, limit: int = 120) -> str:
         clipped = clipped[:last_space]
     return clipped + "…"
 
-def _wrap(text: str, limit: int = 120, indent: str = "     ") -> str:
-    """Clip text at a word boundary and wrap to fit a narrow terminal/TUI viewport."""
+def _wrap(text: str, limit: int = 120, indent: str = "     ", full: bool = False) -> str:
+    """Clip text at a word boundary and wrap to fit a narrow terminal/TUI viewport.
+    Pass full=True to wrap without truncation."""
     return textwrap.fill(
-        _clip(text, limit), width=72,
+        _clip(text, limit, full=full), width=72,
         initial_indent=indent,
         subsequent_indent=indent,
     )
@@ -75,14 +79,14 @@ def _wrap(text: str, limit: int = 120, indent: str = "     ") -> str:
 
 # ─── terminal renderers (one per source_type) ────────────────────────────────
 
-def _render_arxiv_paper(rec: dict) -> None:
+def _render_arxiv_paper(rec: dict, full: bool = False) -> None:
     r = rec["resource"]
     reasoning = rec.get("reasoning", "").strip()
     summary = reasoning or (r.get("abstract_summary") or "").strip()
 
     click.echo(f"     {_fmt_authors(r.get('authors', []))}")
     if summary:
-        click.echo(_wrap(summary))
+        click.echo(_wrap(summary, full=full))
 
     extras = []
     if r.get("has_docker") and r.get("docker_image"):
@@ -93,7 +97,7 @@ def _render_arxiv_paper(rec: dict) -> None:
         click.echo(f"     {' | '.join(extras)}")
 
 
-def _render_github_repo(rec: dict) -> None:
+def _render_github_repo(rec: dict, full: bool = False) -> None:
     """Stub for future github_repo source type."""
     r = rec["resource"]
     reasoning = rec.get("reasoning", "").strip()
@@ -106,7 +110,7 @@ def _render_github_repo(rec: dict) -> None:
     if meta:
         click.echo(f"     {' · '.join(meta)}")
     if reasoning:
-        click.echo(_wrap(reasoning))
+        click.echo(_wrap(reasoning, full=full))
     if r.get("has_docker") and r.get("docker_image"):
         click.echo(f"     🐳 {r['docker_image']}")
 
@@ -123,12 +127,13 @@ _RENDERERS: Dict[str, Callable[[dict], None]] = {
 }
 
 
-def _render_recommendation(rec: dict, rank: int) -> None:
+def _render_recommendation(rec: dict, rank: int, full: bool = False) -> None:
     source_type = rec.get("source_type", "unknown")
     score = rec.get("relevance_score", 0.0)
     click.echo(f"\n  {rank}. {rec['title']}")
     click.echo(f"     {rec['url']}")
-    _RENDERERS.get(source_type, _render_unknown)(rec)
+    renderer = _RENDERERS.get(source_type, _render_unknown)
+    renderer(rec, full=full)
     click.echo(f"     Relevance: {_relevance_bar(score)}")
 
 
@@ -208,7 +213,7 @@ def build_slack_digest(data: dict) -> str:
     blocks = [f"🔬 *Remyx Daily Recommendations* — {today_str}", "━" * 44]
 
     for interest in interests:
-        recs = interest.get("recommendations", [])
+        recs = interest.get("papers", interest.get("recommendations", []))
         iname = interest["name"]
         if not recs:
             blocks.append(f"\n_{iname}: no new recommendations today._")
@@ -232,6 +237,7 @@ def handle_papers_digest(
     limit: int = 5,
     period: str = "today",
     output_format: str = "text",
+    full: bool = False,
 ) -> None:
     try:
         data = get_recommendations_digest(limit=limit, period=period)
@@ -261,14 +267,14 @@ def handle_papers_digest(
         return
 
     for interest in interests:
-        recs = interest.get("recommendations", [])
+        recs = interest.get("papers", interest.get("recommendations", []))
         if not recs:
             click.echo(f"\n  {interest['name']}: no new items today.\n")
             continue
         n = len(recs)
         click.echo(f"\n  {interest['name']}  ({n} item{'s' if n != 1 else ''})")
         for i, rec in enumerate(recs, start=1):
-            _render_recommendation(rec, i)
+            _render_recommendation(rec, i, full=full)
         click.echo()
 
     click.echo("━" * 60)
@@ -287,6 +293,7 @@ def handle_papers_list(
     period: str,
     source_type: Optional[str],
     output_format: str,
+    full: bool = False,
 ) -> None:
     try:
         data = list_recommended(
@@ -312,7 +319,7 @@ def handle_papers_list(
     click.echo(f"\n📚  Recommendations ({period})  — {len(recs)} result(s)")
     click.echo("━" * 60)
     for i, rec in enumerate(recs, start=1):
-        _render_recommendation(rec, i)
+        _render_recommendation(rec, i, full=full)
     click.echo()
 
 
