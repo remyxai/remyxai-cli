@@ -1,6 +1,4 @@
 """
-remyxai/cli/recommendation_actions.py
-
 CLI action handlers for paper recommendations.
 Called by the `remyxai papers` command group in commands.py.
 
@@ -55,13 +53,24 @@ def _fmt_authors(authors: List[str], max_n: int = 3) -> str:
     return ", ".join(authors[:max_n]) + " et al."
 
 
-def _wrap(text: str, limit: int = 160, indent: str = "     💡 ") -> str:
-    clipped = text[:limit] + ("…" if len(text) > limit else "")
+def _clip(text: str, limit: int = 120) -> str:
+    """Clip text at a word boundary and append ellipsis if truncated."""
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rstrip()
+    last_space = clipped.rfind(" ")
+    if last_space > limit - 25:
+        clipped = clipped[:last_space]
+    return clipped + "…"
+
+def _wrap(text: str, limit: int = 120, indent: str = "     ") -> str:
+    """Clip text at a word boundary and wrap to fit a narrow terminal/TUI viewport."""
     return textwrap.fill(
-        clipped, width=76,
+        _clip(text, limit), width=72,
         initial_indent=indent,
-        subsequent_indent=" " * len(indent),
+        subsequent_indent=indent,
     )
+
 
 
 # ─── terminal renderers (one per source_type) ────────────────────────────────
@@ -102,10 +111,10 @@ def _render_github_repo(rec: dict) -> None:
         click.echo(f"     🐳 {r['docker_image']}")
 
 
-def _render_unknown(rec: dict) -> None:
+def _render_unknown(rec: dict, full: bool = False) -> None:
     reasoning = rec.get("reasoning", "").strip()
     if reasoning:
-        click.echo(f"     💡 {reasoning[:160]}")
+        click.echo(f"     {_clip(reasoning, full=full)}")
 
 
 _RENDERERS: Dict[str, Callable[[dict], None]] = {
@@ -133,7 +142,7 @@ def _slack_arxiv_paper(rec: dict) -> List[str]:
     lines = [f"*<{rec['url']}|{rec['title']}>*"]
     lines.append(f"_{_fmt_authors(r.get('authors', []))}_")
     if summary:
-        lines.append(summary[:160] + ("…" if len(summary) > 160 else ""))
+        lines.append(_clip(summary))
     extras = []
     if r.get("has_docker"):
         extras.append("🐳 Docker image available")
@@ -158,7 +167,7 @@ def _slack_github_repo(rec: dict) -> List[str]:
     if meta:
         lines.append("  ".join(meta))
     if reasoning:
-        lines.append(reasoning[:160] + ("…" if len(reasoning) > 160 else ""))
+        lines.append(_clip(reasoning))
     return lines
 
 
@@ -166,7 +175,7 @@ def _slack_unknown(rec: dict) -> List[str]:
     lines = [f"*<{rec['url']}|{rec['title']}>*"]
     reasoning = rec.get("reasoning", "").strip()
     if reasoning:
-        lines.append(reasoning[:160])
+        lines.append(_clip(reasoning))
     return lines
 
 
