@@ -231,9 +231,9 @@ def papers():
 def papers_digest(limit, period, output_format, full):
     """
     Show recommendations grouped by Research Interest.
- 
+
     Examples:
- 
+
       remyxai papers digest
       remyxai papers digest --period week --limit 3
       remyxai papers digest --full
@@ -243,8 +243,8 @@ def papers_digest(limit, period, output_format, full):
 
 
 @papers.command("list")
-@click.option("--interest-id", "-i", default=None,
-              help="Filter by Research Interest UUID.")
+@click.option("--interest", "-i", default=None,
+              help="Filter by Research Interest name or UUID.")
 @click.option("--limit", "-n", default=20, show_default=True,
               help="Max results (1-50).")
 @click.option("--period", "-p", default="all", show_default=True,
@@ -255,19 +255,20 @@ def papers_digest(limit, period, output_format, full):
               type=click.Choice(["text", "json"]), show_default=True)
 @click.option("--full", is_flag=True, default=False,
               help="Show full reasoning text without truncation.")
-def papers_list(interest_id, limit, period, source_type, output_format, full):
+def papers_list(interest, limit, period, source_type, output_format, full):
     """
     List recommendations (flat view, optionally filtered).
 
     Examples:
 
       remyxai papers list --period today
+      remyxai papers list --interest "Reinforcement Learning" --period today
       remyxai papers list --source-type arxiv_paper --period week
-      remyxai papers list --interest-id <uuid> --format json
+      remyxai papers list --format json
       remyxai papers list --full
     """
     handle_papers_list(
-        interest_id=interest_id,
+        interest_id=interest,
         limit=limit,
         period=period,
         source_type=source_type,
@@ -277,15 +278,15 @@ def papers_list(interest_id, limit, period, source_type, output_format, full):
 
 
 @papers.command("refresh")
-@click.option("--interest-id", "-i", default=None,
-              help="Refresh one interest (omit to refresh all active).")
+@click.option("--interest", "-i", default=None,
+              help="Refresh one interest by name or UUID (omit to refresh all active).")
 @click.option("--num-results", "-n", default=None, type=int,
               help="Items per interest (defaults to interest.daily_count).")
 @click.option("--wait", "-w", is_flag=True, default=False,
               help="Block until all tasks complete.")
 @click.option("--format", "-f", "output_format", default="text",
               type=click.Choice(["text", "json"]), show_default=True)
-def papers_refresh(interest_id, num_results, wait, output_format):
+def papers_refresh(interest, num_results, wait, output_format):
     """
     Trigger a fresh Gemini re-ranking run for your Research Interests.
 
@@ -295,10 +296,11 @@ def papers_refresh(interest_id, num_results, wait, output_format):
     Examples:
 
       remyxai papers refresh --wait
-      remyxai papers refresh --interest-id <uuid> --num-results 5 --wait
+      remyxai papers refresh --interest "Reinforcement Learning" --wait
+      remyxai papers refresh --interest "Reinforcement Learning" --num-results 5 --wait
     """
     handle_papers_refresh(
-        interest_id=interest_id,
+        interest_id=interest,
         num_results=num_results,
         wait=wait,
         output_format=output_format,
@@ -353,18 +355,19 @@ def interests_list(output_format):
 
 
 @interests.command("get")
-@click.argument("interest_id")
+@click.option("--interest", "-i", required=True,
+              help="Interest name or UUID.")
 @click.option("--format", "-f", "output_format", default="text",
               type=click.Choice(["text", "json"]), show_default=True)
-def interests_get(interest_id, output_format):
+def interests_get(interest, output_format):
     """
-    Show a single Research Interest by ID.
+    Show a single Research Interest.
 
     Example:
 
-      remyxai interests get <uuid>
+      remyxai interests get --interest "Reinforcement Learning"
     """
-    handle_interests_get(interest_id=interest_id, output_format=output_format)
+    handle_interests_get(interest_id=interest, output_format=output_format)
 
 
 @interests.command("create")
@@ -403,7 +406,8 @@ def interests_create(name, context, daily_count, inactive, output_format):
 
 
 @interests.command("update")
-@click.argument("interest_id")
+@click.option("--interest", "-i", required=True,
+              help="Interest name or UUID.")
 @click.option("--name", "-n", default=None, help="New name.")
 @click.option("--context", "-c", default=None,
               help="New context — invalidates the recommendation pool.")
@@ -415,7 +419,7 @@ def interests_create(name, context, daily_count, inactive, output_format):
               help="Set inactive.")
 @click.option("--format", "-f", "output_format", default="text",
               type=click.Choice(["text", "json"]), show_default=True)
-def interests_update(interest_id, name, context, daily_count, is_active, output_format):
+def interests_update(interest, name, context, daily_count, is_active, output_format):
     """
     Update a Research Interest.
 
@@ -424,12 +428,12 @@ def interests_update(interest_id, name, context, daily_count, is_active, output_
 
     Examples:
 
-      remyxai interests update <uuid> --daily-count 5
-      remyxai interests update <uuid> --context "New research focus..."
-      remyxai interests update <uuid> --deactivate
+      remyxai interests update --interest "Reinforcement Learning" --daily-count 5
+      remyxai interests update --interest "Reinforcement Learning" --context "New research focus..."
+      remyxai interests update --interest "Reinforcement Learning" --deactivate
     """
     handle_interests_update(
-        interest_id=interest_id,
+        interest_id=interest,
         name=name,
         context=context,
         daily_count=daily_count,
@@ -439,41 +443,43 @@ def interests_update(interest_id, name, context, daily_count, is_active, output_
 
 
 @interests.command("delete")
-@click.argument("interest_id")
+@click.option("--interest", "-i", required=True,
+              help="Interest name or UUID.")
 @click.option("--yes", "-y", is_flag=True, default=False,
               help="Skip confirmation prompt.")
 @click.option("--format", "-f", "output_format", default="text",
               type=click.Choice(["text", "json"]), show_default=True)
-def interests_delete(interest_id, yes, output_format):
+def interests_delete(interest, yes, output_format):
     """
     Delete a Research Interest and all its recommendations.
 
     Examples:
 
-      remyxai interests delete <uuid>
-      remyxai interests delete <uuid> --yes
+      remyxai interests delete --interest "Reinforcement Learning"
+      remyxai interests delete --interest "Reinforcement Learning" --yes
     """
     handle_interests_delete(
-        interest_id=interest_id,
+        interest_id=interest,
         yes=yes,
         output_format=output_format,
     )
 
 
 @interests.command("toggle")
-@click.argument("interest_id")
+@click.option("--interest", "-i", required=True,
+              help="Interest name or UUID.")
 @click.option("--format", "-f", "output_format", default="text",
               type=click.Choice(["text", "json"]), show_default=True)
-def interests_toggle(interest_id, output_format):
+def interests_toggle(interest, output_format):
     """
     Toggle a Research Interest between active and inactive.
 
     Example:
 
-      remyxai interests toggle <uuid>
+      remyxai interests toggle --interest "Reinforcement Learning"
     """
     handle_interests_toggle(
-        interest_id=interest_id,
+        interest_id=interest,
         output_format=output_format,
     )
 

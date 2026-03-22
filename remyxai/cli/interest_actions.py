@@ -1,12 +1,11 @@
 """
-remyxai/cli/interest_actions.py
-
 CLI action handlers for Research Interest management.
 Called by the `remyxai interests` command group in commands.py.
 """
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from typing import Optional
@@ -46,6 +45,41 @@ def _print_interest(i: dict, verbose: bool = False) -> None:
             click.echo(wrapped)
 
 
+# ─── name-or-id resolver ─────────────────────────────────────────────────────
+
+def _resolve_interest_id(name_or_id: str) -> str:
+    """Accept either a UUID or an interest name and return the UUID.
+
+    If name_or_id looks like a UUID (36 chars, hyphen-separated),
+    return it directly. Otherwise fetch all interests and match by name
+    case-insensitively, returning the first match found.
+    """
+    if re.match(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        name_or_id, re.IGNORECASE
+    ):
+        return name_or_id
+
+    try:
+        interests = list_interests()
+    except Exception as e:
+        click.echo("Failed to fetch interests: {}".format(e), err=True)
+        sys.exit(1)
+
+    needle = name_or_id.lower()
+    for interest in interests:
+        if interest.get("name", "").lower() == needle:
+            return interest["id"]
+
+    names = [i.get("name", "") for i in interests]
+    available = ", ".join(names) if names else "none"
+    click.echo(
+        "No interest found with name {!r}. Available: {}".format(name_or_id, available),
+        err=True,
+    )
+    sys.exit(1)
+
+
 # ─── list ────────────────────────────────────────────────────────────────────
 
 def handle_interests_list(output_format: str = "text") -> None:
@@ -80,6 +114,7 @@ def handle_interests_list(output_format: str = "text") -> None:
 # ─── get ─────────────────────────────────────────────────────────────────────
 
 def handle_interests_get(interest_id: str, output_format: str = "text") -> None:
+    interest_id = _resolve_interest_id(interest_id)
     try:
         interest = get_interest(interest_id)
     except Exception as e:
@@ -139,7 +174,7 @@ def handle_interests_create(
     )
     click.echo(
         "  Trigger your first recommendations:\n"
-        f"  remyxai papers refresh --interest-id {result['id']} --wait\n"
+        f"  remyxai papers refresh --interest {result['name']!r} --wait\n"
     )
 
 
@@ -153,6 +188,7 @@ def handle_interests_update(
     is_active: Optional[bool],
     output_format: str,
 ) -> None:
+    interest_id = _resolve_interest_id(interest_id)
     if not any(v is not None for v in [name, context, daily_count, is_active]):
         click.echo(
             "❌ Provide at least one field to update:\n"
@@ -181,7 +217,7 @@ def handle_interests_update(
     if result.get("pool_invalidated"):
         click.echo(
             "   ℹ️  Context changed — recommendation pool cleared.\n"
-            f"   Run:  remyxai papers refresh --interest-id {interest_id} --wait"
+            f"   Run:  remyxai papers refresh --interest {result['name']!r} --wait"
         )
     click.echo()
 
@@ -193,6 +229,7 @@ def handle_interests_delete(
     yes: bool,
     output_format: str,
 ) -> None:
+    interest_id = _resolve_interest_id(interest_id)
     if not yes:
         try:
             i = get_interest(interest_id)
@@ -222,6 +259,7 @@ def handle_interests_delete(
 # ─── toggle ──────────────────────────────────────────────────────────────────
 
 def handle_interests_toggle(interest_id: str, output_format: str) -> None:
+    interest_id = _resolve_interest_id(interest_id)
     try:
         result = toggle_interest(interest_id)
     except Exception as e:

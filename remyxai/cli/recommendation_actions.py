@@ -1,6 +1,4 @@
 """
-remyxai/cli/recommendation_actions.py
-
 CLI action handlers for paper recommendations.
 Called by the `remyxai papers` command group in commands.py.
 
@@ -32,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import click
 
+from remyxai.cli.interest_actions import _resolve_interest_id
 from remyxai.api.recommendations import (
     get_recommendations_digest,
     list_recommended,
@@ -66,6 +65,7 @@ def _clip(text: str, limit: int = 120, full: bool = False) -> str:
         clipped = clipped[:last_space]
     return clipped + "…"
 
+
 def _wrap(text: str, limit: int = 120, indent: str = "     ", full: bool = False) -> str:
     """Clip text at a word boundary and wrap to fit a narrow terminal/TUI viewport.
     Pass full=True to wrap without truncation."""
@@ -74,7 +74,6 @@ def _wrap(text: str, limit: int = 120, indent: str = "     ", full: bool = False
         initial_indent=indent,
         subsequent_indent=indent,
     )
-
 
 
 # ─── terminal renderers (one per source_type) ────────────────────────────────
@@ -207,7 +206,6 @@ def build_slack_digest(data: dict) -> str:
     """
     today_str = date.today().strftime("%B %-d")
     interests = data.get("interests", [])
-    # Engine returns total_papers (not total)
     total = data.get("total_papers", 0)
 
     blocks = [f"🔬 *Remyx Daily Recommendations* — {today_str}", "━" * 44]
@@ -250,7 +248,6 @@ def handle_papers_digest(
         return
 
     interests = data.get("interests", [])
-    # Engine returns total_papers (not total)
     total = data.get("total_papers", 0)
     source_types = data.get("source_types", [])
 
@@ -295,6 +292,8 @@ def handle_papers_list(
     output_format: str,
     full: bool = False,
 ) -> None:
+    if interest_id is not None:
+        interest_id = _resolve_interest_id(interest_id)
     try:
         data = list_recommended(
             interest_id=interest_id,
@@ -310,7 +309,6 @@ def handle_papers_list(
         click.echo(json.dumps(data, indent=2))
         return
 
-    # Engine returns "papers" as the list key on this endpoint
     recs = data.get("papers", data.get("recommendations", []))
     if not recs:
         click.echo(f"\n  No recommendations found (period={period}).")
@@ -331,6 +329,8 @@ def handle_papers_refresh(
     wait: bool,
     output_format: str,
 ) -> None:
+    if interest_id is not None:
+        interest_id = _resolve_interest_id(interest_id)
     try:
         result = trigger_recommendations_refresh(
             interest_id=interest_id,
@@ -357,7 +357,6 @@ def handle_papers_refresh(
         )
         return
 
-    # Poll until all tasks reach a terminal state
     click.echo("\n  Waiting", nl=False)
     terminal = {"completed", "failed"}
     pending = {t["task_id"]: t["interest_name"] for t in tasks}
@@ -373,7 +372,7 @@ def handle_papers_refresh(
                     final[task_id] = status
                     del pending[task_id]
             except Exception:
-                pass  # transient — keep polling
+                pass
 
     click.echo(" done!\n")
     for status in final.values():
