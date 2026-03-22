@@ -3,25 +3,44 @@ import re
 import logging
 import requests
 from typing import List, Tuple, Optional
-from huggingface_hub import HfFolder
+
+# HfFolder was deprecated in huggingface_hub 0.17 and removed in 0.24+.
+# Use get_token() (available since 0.17) with HfFolder as a fallback for
+# older installs.
+try:
+    from huggingface_hub import get_token as _hf_get_token
+    def _get_hf_folder_token() -> Optional[str]:
+        return _hf_get_token()
+except ImportError:
+    try:
+        from huggingface_hub import HfFolder
+        def _get_hf_folder_token() -> Optional[str]:
+            return HfFolder.get_token()
+    except ImportError:
+        def _get_hf_folder_token() -> Optional[str]:
+            return None
+
 from remyxai.api.models import fetch_available_architectures
+
 
 def get_hf_token() -> Optional[str]:
     """
     Fetches the Hugging Face token from the user's environment.
     Tries environment variable 'HF_TOKEN' first, then the Hugging Face cache.
+    Compatible with all huggingface_hub versions.
     """
     hf_token = os.getenv('HF_TOKEN')
     if hf_token:
         return hf_token
-    hf_token = HfFolder.get_token()
-    return hf_token
+    return _get_hf_folder_token()
+
 
 def get_headers(hf_token: Optional[str]):
     headers = {}
     if hf_token:
         headers["Authorization"] = f"Bearer {hf_token}"
     return headers
+
 
 def validate_model_architecture(
     model_id: str, supported_archs: List[str], hf_token: Optional[str]
@@ -61,6 +80,7 @@ def validate_model_architecture(
         logging.error(f"Unexpected error during architecture validation: {e}")
         return False, f"Unexpected error during validation: {e}"
 
+
 def validate_model_size(model_id: str, max_size_billion: int = 8) -> Tuple[bool, str]:
     """
     Validates a model's size based on its repository name convention.
@@ -78,7 +98,7 @@ def validate_model_size(model_id: str, max_size_billion: int = 8) -> Tuple[bool,
     size = float(size_str)
 
     if unit.upper() == "M":
-        size /= 1000  # Convert millions to billions if necessary
+        size /= 1000
 
     if size <= max_size_billion:
         return True, (
@@ -90,6 +110,7 @@ def validate_model_size(model_id: str, max_size_billion: int = 8) -> Tuple[bool,
             f"Model '{model_id}' size ({size}B) exceeds the allowed limit of "
             f"{max_size_billion}B."
         )
+
 
 def validate_model(
     model_id: str, supported_archs: List[str], hf_token: Optional[str], max_size_billion: int = 8
@@ -109,6 +130,7 @@ def validate_model(
 
     return True, f"Model '{model_id}' passed validation for architecture and size."
 
+
 def _validate_models(
     models: List[str], max_size_billion: int = 8
 ):
@@ -116,12 +138,10 @@ def _validate_models(
     Validates a list of models, raising an exception if any fail validation.
     Automatically fetches the user's HF token from the environment.
     """
-    # Fetch the supported architectures once
     supported_archs = fetch_available_architectures()["message"]
     if not supported_archs:
         raise ValueError("Failed to fetch supported architectures from server.")
 
-    # Fetch the HF token
     hf_token = get_hf_token()
     if not hf_token:
         logging.warning("No Hugging Face token found; only public models can be validated.")
@@ -141,4 +161,3 @@ def _validate_models(
     if invalid_models:
         error_messages = "\n".join(reasons)
         raise ValueError(f"The following models failed validation:\n{error_messages}")
-
