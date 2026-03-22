@@ -1,14 +1,33 @@
-import pytest
-from unittest.mock import patch
-from remyxai.api.inference import run_inference
+import time
+import numpy as np
 
 
-@patch("remyxai.api.inference.InferenceServerClient")
-def test_run_inference(mock_triton_client):
-    mock_client_instance = mock_triton_client.return_value
-    mock_client_instance.infer.return_value.get_response.return_value = {
-        "outputs": [{"data": ["output_data"]}]
-    }
+def run_inference(model_name, prompt, server_url="localhost:8000", model_version="1"):
+    # Lazy import — tritonclient is an optional extra (pip install remyxai[triton]).
+    # Keeping it here rather than at module level means everything that imports
+    # remyxai.api (including remyx_client, commands, and the test suite) works
+    # without tritonclient installed.
+    try:
+        from tritonclient.http import InferenceServerClient, InferInput, InferRequestedOutput
+    except ImportError:
+        raise ImportError(
+            "tritonclient is required for inference. "
+            "Install it with: pip install remyxai[triton]"
+        )
 
-    results, elapsed_time = run_inference("model_name", "test_prompt")
-    assert results == "output_data"
+    triton_client = InferenceServerClient(url=server_url, verbose=False)
+    prompt_np = np.array([prompt.encode("utf-8")], dtype=object)
+    prompt_in = InferInput(name="PROMPT", shape=[1], datatype="BYTES")
+    prompt_in.set_data_from_numpy(prompt_np, binary_data=True)
+    results_out = InferRequestedOutput(name="RESULTS", binary_data=False)
+
+    start_time = time.time()
+    response = triton_client.infer(
+        model_name=model_name,
+        model_version=model_version,
+        inputs=[prompt_in],
+        outputs=[results_out],
+    )
+    elapsed_time = time.time() - start_time
+    results = response.get_response()["outputs"][0]["data"][0]
+    return results, elapsed_time
