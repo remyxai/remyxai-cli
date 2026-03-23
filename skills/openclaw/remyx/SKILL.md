@@ -16,6 +16,7 @@ metadata:
 ---
 
 # Remyx Daily Recommendations Skill
+*read full tutorial on how to use this skill in the docs: https://docs.remyx.ai/tutorials/daily-research-digest-slack*
 
 ## Purpose
 
