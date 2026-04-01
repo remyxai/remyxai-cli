@@ -170,3 +170,4 @@ weights/
 models/
 .terraform
 .terraform.lock.hcl
+examples/.bashrc
