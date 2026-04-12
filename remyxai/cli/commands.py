@@ -26,6 +26,12 @@ from remyxai.cli.interest_actions import (
     handle_interests_delete,
     handle_interests_toggle,
 )
+from remyxai.cli.dockergen_actions import (
+    handle_generate,
+    handle_generate_wait,
+    handle_status,
+    handle_lookup,
+)
 
 @click.group()
 def cli():
@@ -482,6 +488,96 @@ def interests_toggle(interest, output_format):
         interest_id=interest,
         output_format=output_format,
     )
+
+
+# =============================================================================
+# dockergen — validated Dockerfile generation from GitHub repos
+# =============================================================================
+
+@cli.group()
+def dockergen():
+    """
+    Generate validated Dockerfiles from GitHub repos.
+
+    Uses the Remyx Builder pipeline to analyze a repo, generate a Dockerfile,
+    and validate it through real Docker builds with error feedback.
+    """
+    pass
+
+
+@dockergen.command("generate")
+@click.argument("github_url")
+@click.option("--branch", "-b", default=None, help="Git branch (default: repo default).")
+@click.option("--gpu", is_flag=True, default=False, help="Use GPU/CUDA base image.")
+@click.option("--wait", "-w", is_flag=True, default=False,
+              help="Block until generation completes.")
+@click.option("--timeout", "-t", default=300, show_default=True,
+              help="Timeout in seconds when --wait.")
+@click.option("--output", "-o", "output_file", default=None,
+              help="Write Dockerfile to file (implies --wait).")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def dockergen_generate(github_url, branch, gpu, wait, timeout, output_file, output_format):
+    """
+    Generate a validated Dockerfile for a GitHub repo.
+
+    Examples:
+
+      # Submit and get task ID
+      remyxai dockergen generate https://github.com/org/repo
+
+      # Wait for completion
+      remyxai dockergen generate https://github.com/org/repo --wait
+
+      # Save to file
+      remyxai dockergen generate https://github.com/org/repo -o Dockerfile
+
+      # JSON output for scripting
+      remyxai dockergen generate https://github.com/org/repo -w -f json | jq -r '.dockerfile_text' > Dockerfile
+    """
+    if output_file:
+        wait = True
+    if wait:
+        handle_generate_wait(
+            github_url, branch=branch, gpu=gpu,
+            timeout=timeout, output_format=output_format, output_file=output_file,
+        )
+    else:
+        handle_generate(github_url, branch=branch, gpu=gpu, output_format=output_format)
+
+
+@dockergen.command("status")
+@click.argument("task_id")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def dockergen_status(task_id, output_format):
+    """
+    Check the status of a Dockerfile generation task.
+
+    Example:
+
+      remyxai dockergen status a1b2c3d4-0000-0000-0000-000000000000
+    """
+    handle_status(task_id, output_format=output_format)
+
+
+@dockergen.command("lookup")
+@click.argument("github_url")
+@click.option("--branch", "-b", default=None, help="Filter by branch.")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def dockergen_lookup(github_url, branch, output_format):
+    """
+    Look up a cached Dockerfile for a GitHub repo.
+
+    Returns immediately if a validated Dockerfile exists in the cache.
+
+    Examples:
+
+      remyxai dockergen lookup https://github.com/org/repo
+      remyxai dockergen lookup https://github.com/org/repo --format json
+    """
+    handle_lookup(github_url, branch=branch, output_format=output_format)
 
 
 if __name__ == "__main__":
