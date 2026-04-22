@@ -8,18 +8,68 @@ import json
 import re
 import sys
 import textwrap
+import time
 from typing import Optional
 
 import click
 
 from remyxai.api.interests import (
+    analyze_repo,
     create_interest,
     delete_interest,
     get_interest,
+    list_github_repos,
     list_interests,
+    poll_repo_analysis,
+    regenerate_interest,
     toggle_interest,
     update_interest,
 )
+
+
+# ─── repo-analysis polling helper ────────────────────────────────────────────
+
+
+def _wait_for_repo_analysis(
+    task_id: str,
+    timeout_s: int = 180,
+    poll_interval_s: float = 2.0,
+) -> dict:
+    """Block until a repo-analysis task completes or fails.
+
+    Surfaces progress messages inline so the user sees what's happening.
+    """
+    click.echo(f"  task_id: {task_id}")
+    click.echo("  Waiting for analysis to complete (up to {}s)...".format(timeout_s))
+
+    deadline = time.monotonic() + timeout_s
+    last_message = ""
+    while time.monotonic() < deadline:
+        task = poll_repo_analysis(task_id)
+        status = task.get("status") or ""
+        message = task.get("message") or ""
+
+        if message and message != last_message:
+            click.echo(f"    • {message}")
+            last_message = message
+
+        if status in ("complete", "completed", "done"):
+            return task
+        if status in ("failed", "error"):
+            click.echo(
+                f"❌ Analysis failed: {task.get('error') or message or 'unknown error'}",
+                err=True,
+            )
+            sys.exit(1)
+
+        time.sleep(poll_interval_s)
+
+    click.echo(
+        f"❌ Analysis did not complete within {timeout_s}s. "
+        f"Poll manually with task_id={task_id}",
+        err=True,
+    )
+    sys.exit(1)
 
 
 # ─── formatting helpers ──────────────────────────────────────────────────────
@@ -139,7 +189,37 @@ def handle_interests_create(
     daily_count: int,
     inactive: bool,
     output_format: str,
+    repo: Optional[str] = None,
 ) -> None:
+    # REMYX-28 repo-sourced flow: kick off analysis, poll, use the returned
+    # markdown as context, and persist the repo fields on save.
+    repo_payload: Optional[dict] = None
+    if repo:
+        click.echo(f"\n🔍  Analyzing {repo} to seed a Research Interest...")
+        try:
+            kickoff = analyze_repo(repo)
+        except Exception as e:
+            click.echo(f"❌ Failed to start repo analysis: {e}", err=True)
+            sys.exit(1)
+        repo_payload = _wait_for_repo_analysis(kickoff["task_id"])
+        click.echo("✅  Analysis complete.\n")
+
+        # Prefer the server-generated markdown as context; fall back to the
+        # user's --context if they supplied one.
+        if not context:
+            context = (
+                repo_payload.get("report_markdown")
+                or repo_payload.get("generated_report")
+                or ""
+            )
+        # Auto-name from repo "owner/name" if not provided.
+        if not name:
+            meta = repo_payload.get("source_repo_metadata") or {}
+            auto = meta.get("name") or meta.get("full_name")
+            if auto:
+                name = auto
+                click.echo(f"   Using auto-generated name: {name}\n")
+
     if not name:
         name = click.prompt("  Interest name (e.g. 'RAG & Retrieval')")
     if not context:
@@ -153,12 +233,23 @@ def handle_interests_create(
         context = click.prompt("  Context")
 
     try:
-        result = create_interest(
-            name=name,
-            context=context,
-            daily_count=daily_count,
-            is_active=not inactive,
-        )
+        create_kwargs = {
+            "name": name,
+            "context": context,
+            "daily_count": daily_count,
+            "is_active": not inactive,
+        }
+        if repo_payload:
+            create_kwargs.update({
+                "source_repo_url": repo,
+                "source_repo_metadata": repo_payload.get("source_repo_metadata"),
+                "generated_report": (
+                    repo_payload.get("report_markdown")
+                    or repo_payload.get("generated_report")
+                ),
+                "repo_analysis": repo_payload.get("repo_analysis"),
+            })
+        result = create_interest(**create_kwargs)
     except Exception as e:
         click.echo(f"❌ Failed to create interest: {e}", err=True)
         sys.exit(1)
@@ -272,3 +363,93 @@ def handle_interests_toggle(interest_id: str, output_format: str) -> None:
 
     state = "active ✅" if result.get("is_active") else "paused ⏸"
     click.echo(f"\n  '{result['name']}' is now {state}\n")
+
+
+# ─── regenerate (REMYX-28) ───────────────────────────────────────────────────
+
+def handle_interests_regenerate(
+    interest_id: str,
+    repo_url: Optional[str],
+    output_format: str,
+) -> None:
+    """Re-run repo analysis against an existing interest and persist the
+    refreshed payload via update_interest once the task completes."""
+    interest_id = _resolve_interest_id(interest_id)
+
+    try:
+        kickoff = regenerate_interest(interest_id, repo_url=repo_url)
+    except Exception as e:
+        click.echo(f"❌ Failed to start regenerate: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(
+        f"\n🔁  Regenerating repo analysis for interest {interest_id}..."
+    )
+    payload = _wait_for_repo_analysis(kickoff["task_id"])
+
+    try:
+        result = update_interest(
+            interest_id=interest_id,
+            context=(
+                payload.get("report_markdown") or payload.get("generated_report")
+            ),
+            source_repo_metadata=payload.get("source_repo_metadata"),
+            generated_report=(
+                payload.get("report_markdown") or payload.get("generated_report")
+            ),
+            repo_analysis=payload.get("repo_analysis"),
+        )
+    except Exception as e:
+        click.echo(f"❌ Failed to apply regenerated payload: {e}", err=True)
+        sys.exit(1)
+
+    if output_format == "json":
+        click.echo(json.dumps(result, indent=2))
+        return
+
+    click.echo(f"\n✅  Regenerated '{result.get('name', interest_id)}'")
+    if result.get("pool_invalidated"):
+        click.echo(
+            "   ℹ️  Recommendation pool cleared.\n"
+            f"   Run:  remyxai papers refresh --interest "
+            f"{result['name']!r} --wait"
+        )
+    click.echo()
+
+
+# ─── list-repos (REMYX-28) ───────────────────────────────────────────────────
+
+def handle_interests_list_repos(output_format: str) -> None:
+    """List GitHub repos the caller can source an interest from."""
+    try:
+        result = list_github_repos()
+    except Exception as e:
+        click.echo(f"❌ Failed to list GitHub repos: {e}", err=True)
+        sys.exit(1)
+
+    if output_format == "json":
+        click.echo(json.dumps(result, indent=2))
+        return
+
+    if not result.get("connected"):
+        click.echo(
+            "\n  GitHub is not connected for this account.\n"
+            "  Connect at Settings → Integrations, then retry.\n"
+        )
+        return
+
+    repos = result.get("repos") or []
+    if not repos:
+        click.echo("\n  No repos visible via the connected GitHub integration.\n")
+        return
+
+    click.echo(f"\n🐙  GitHub repos  ({len(repos)})")
+    click.echo("━" * 60)
+    for r in repos:
+        name = r.get("full_name") or r.get("name") or "(unnamed)"
+        url = r.get("html_url") or r.get("url") or ""
+        private_tag = " [private]" if r.get("private") else ""
+        click.echo(f"  {name}{private_tag}")
+        if url:
+            click.echo(f"       {url}")
+    click.echo()

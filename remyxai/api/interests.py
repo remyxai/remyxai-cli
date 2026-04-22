@@ -61,6 +61,10 @@ def create_interest(
     context: str,
     daily_count: int = 2,
     is_active: bool = True,
+    source_repo_url: Optional[str] = None,
+    source_repo_metadata: Optional[Dict[str, Any]] = None,
+    generated_report: Optional[str] = None,
+    repo_analysis: Optional[Dict[str, Any]] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -75,15 +79,28 @@ def create_interest(
                      will scrape it and generate an embedding.
         daily_count: Items to surface per day (1–10, default 2).
         is_active:   Include in daily digest immediately (default True).
+        source_repo_url, source_repo_metadata, generated_report,
+        repo_analysis: REMYX-28 repo-sourced fields; include after an
+                       analyze-repo flow to persist the analysis payload.
     """
+    body: Dict[str, Any] = {
+        "name": name,
+        "context": context,
+        "daily_count": daily_count,
+        "is_active": is_active,
+    }
+    if source_repo_url is not None:
+        body["source_repo_url"] = source_repo_url
+    if source_repo_metadata is not None:
+        body["source_repo_metadata"] = source_repo_metadata
+    if generated_report is not None:
+        body["generated_report"] = generated_report
+    if repo_analysis is not None:
+        body["repo_analysis"] = repo_analysis
+
     r = requests.post(
         f"{BASE_URL}/interests",
-        json={
-            "name": name,
-            "context": context,
-            "daily_count": daily_count,
-            "is_active": is_active,
-        },
+        json=body,
         headers=_h(api_key),
         timeout=30,
     )
@@ -98,6 +115,10 @@ def update_interest(
     context: Optional[str] = None,
     daily_count: Optional[int] = None,
     is_active: Optional[bool] = None,
+    source_repo_url: Optional[str] = None,
+    source_repo_metadata: Optional[Dict[str, Any]] = None,
+    generated_report: Optional[str] = None,
+    repo_analysis: Optional[Dict[str, Any]] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -118,10 +139,110 @@ def update_interest(
         payload["daily_count"] = daily_count
     if is_active is not None:
         payload["is_active"] = is_active
+    if source_repo_url is not None:
+        payload["source_repo_url"] = source_repo_url
+    if source_repo_metadata is not None:
+        payload["source_repo_metadata"] = source_repo_metadata
+    if generated_report is not None:
+        payload["generated_report"] = generated_report
+    if repo_analysis is not None:
+        payload["repo_analysis"] = repo_analysis
 
     r = requests.put(
         f"{BASE_URL}/interests/{interest_id}",
         json=payload,
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
+
+
+# ─── REMYX-28: repo-sourced interest helpers ─────────────────────────────────
+
+
+def analyze_repo(
+    repo_url: str,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Kick off async repo analysis to seed a Research Interest.
+
+    Calls POST /api/v1.0/interests/analyze-repo
+
+    Returns: {"task_id": "...", "status_url": "..."}  (HTTP 202)
+    """
+    r = requests.post(
+        f"{BASE_URL}/interests/analyze-repo",
+        json={"repo_url": repo_url},
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
+
+
+def poll_repo_analysis(
+    task_id: str,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Poll a repo-analysis task.
+
+    Calls GET /api/v1.0/interests/analyze-repo/<task_id>
+    """
+    r = requests.get(
+        f"{BASE_URL}/interests/analyze-repo/{task_id}",
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
+
+
+def regenerate_interest(
+    interest_id: str,
+    repo_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Re-run repo analysis for an existing Research Interest.
+
+    Calls POST /api/v1.0/interests/<id>/regenerate
+
+    Returns the same shape as analyze_repo (task_id + status_url).
+    Apply the returned payload via update_interest once polling completes.
+    """
+    body: Dict[str, Any] = {}
+    if repo_url is not None:
+        body["repo_url"] = repo_url
+
+    r = requests.post(
+        f"{BASE_URL}/interests/{interest_id}/regenerate",
+        json=body,
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
+
+
+def list_github_repos(
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    List repos the caller can pick from via their GitHub integration.
+
+    Calls GET /api/v1.0/interests/github/repos
+
+    Returns {"connected": bool, "repos": [...]}
+    """
+    r = requests.get(
+        f"{BASE_URL}/interests/github/repos",
         headers=_h(api_key),
         timeout=30,
     )
