@@ -80,7 +80,7 @@ def create_interest(
         daily_count: Items to surface per day (1–10, default 2).
         is_active:   Include in daily digest immediately (default True).
         source_repo_url, source_repo_metadata, generated_report,
-        repo_analysis: REMYX-28 repo-sourced fields; include after an
+        repo_analysis: Repo-sourced fields; include after an
                        analyze-repo flow to persist the analysis payload.
     """
     body: Dict[str, Any] = {
@@ -159,7 +159,7 @@ def update_interest(
     return r.json()
 
 
-# ─── REMYX-28: repo-sourced interest helpers ─────────────────────────────────
+# ─── repo-sourced interest helpers ───────────────────────────────────────────
 
 
 def analyze_repo(

@@ -1,11 +1,5 @@
-"""
-RemyxAI CLI - Main command interface
-All commands use "search" convention for asset discovery
-"""
+"""RemyxAI CLI — ExperimentOps for AI development."""
 import click
-from remyxai.cli.deployment_actions import handle_deployment_action
-from remyxai.cli.evaluation_actions import handle_model_action, handle_evaluation_action
-from remyxai.cli.dataset_actions import handle_dataset_action
 from remyxai.cli.search_actions import (
     handle_search,
     handle_info,
@@ -44,70 +38,21 @@ from remyxai.cli.project_actions import (
 @click.group()
 def cli():
     """
-    RemyxAI CLI - ExperimentOps for AI Development
-    
+    RemyxAI — ExperimentOps for AI development.
+
+    Discover research, track experiments, run validation, and close the
+    loop with automated decisions — all from the command line.
     """
     pass
-
-
-@cli.command()
-def list_models():
-    """List all available models."""
-    try:
-        handle_model_action({"subaction": "list"})
-    except Exception as e:
-        click.echo(f"Error listing models: {e}")
-
-
-@cli.command()
-@click.argument("model_name")
-def summarize_model(model_name):
-    """Summarize a model."""
-    try:
-        handle_model_action({"subaction": "summarize", "model_name": model_name})
-    except Exception as e:
-        click.echo(f"Error summarizing model: {e}")
-
-
-@cli.command()
-@click.argument("models", nargs=-1)
-@click.argument("tasks", nargs=-1)
-def evaluate_myxboard(models, tasks):
-    """Evaluate the MyxBoard with the given models and tasks."""
-    try:
-        handle_evaluation_action({"models": models, "tasks": tasks})
-    except Exception as e:
-        click.echo(f"Error evaluating MyxBoard: {e}")
-
-
-@cli.command()
-@click.argument("model_name")
-@click.argument("action")
-def deploy_model(model_name, action):
-    """Deploy or tear down a model."""
-    try:
-        handle_deployment_action({"model_name": model_name, "action": action})
-    except Exception as e:
-        click.echo(f"Error deploying model: {e}")
-
-
-@cli.command()
-@click.argument("action")
-@click.argument("dataset_name", required=False)
-def dataset(action, dataset_name=None):
-    """Manage datasets."""
-    try:
-        handle_dataset_action({"action": action, "dataset_name": dataset_name})
-    except Exception as e:
-        click.echo(f"Error managing dataset: {e}")
 
 
 @cli.group()
 def search():
     """
-    Search and discover research assets (papers + Docker images).
-    
-    Find research papers, containerized implementations, and related assets.
+    Search and discover research assets.
+
+    Find research papers and containerized implementations matched to
+    your interests.
     """
     pass
 
@@ -225,10 +170,9 @@ def stats_cmd():
 @cli.group()
 def papers():
     """
-    Daily recommendations from Remyx AI GitRank.
+    Daily research recommendations.
 
-    Gemini-ranked arXiv papers (and soon GitHub repos) matched to your
-    Research Interests.
+    Ranked papers (and GitHub repos) matched to your Research Interests.
     """
     pass
 
@@ -302,7 +246,7 @@ def papers_list(interest, limit, period, source_type, output_format, full):
               type=click.Choice(["text", "json"]), show_default=True)
 def papers_refresh(interest, num_results, wait, output_format):
     """
-    Trigger a fresh Gemini re-ranking run for your Research Interests.
+    Trigger a fresh re-ranking run for your Research Interests.
 
     Cold-start (first run, empty pool) takes 40-120s. Subsequent runs
     are served from the pre-ranked pool in ~200ms.
@@ -345,10 +289,10 @@ def interests():
     """
     Manage Research Interest profiles.
 
-    Each profile has a name, a natural-language context describing what to
-    track, and a daily recommendation count. The recommendation pipeline
-    uses the context to match papers, GitHub repos, and future sources —
-    no changes needed here when new sources are added to GitRank.
+    Each profile has a name, a natural-language context describing what
+    to track, and a daily recommendation count. The recommendation
+    pipeline uses the context to match papers, GitHub repos, and other
+    sources.
     """
     pass
 
@@ -390,9 +334,9 @@ def interests_get(interest, output_format):
 @click.option("--context", "-c", default=None,
               help="Natural language description, or a HuggingFace/GitHub URL.")
 @click.option("--repo", default=None,
-              help="GitHub repo URL to generate the interest profile from "
-                   "(REMYX-28). Server runs Gemini analysis and the markdown "
-                   "report becomes the default context.")
+              help="GitHub repo URL to generate the interest profile "
+                   "from. Remyx analyzes the repo and uses the generated "
+                   "markdown as the default context.")
 @click.option("--daily-count", "-d", default=2, show_default=True,
               help="Recommendations per day (1-10).")
 @click.option("--inactive", is_flag=True, default=False,
@@ -549,7 +493,7 @@ def interests_toggle(interest, output_format):
 
 
 # =============================================================================
-# experiments — experiment board + validation (REMYX-19)
+# experiments — experiment board + validation
 # =============================================================================
 
 @cli.group()
@@ -557,9 +501,8 @@ def experiments():
     """
     Browse experiments and launch validation runs.
 
-    The `validate` subcommand wraps the REMYX-24 eval-env pipeline to run
-    baseline-vs-feature evaluations for an experiment against a locked
-    EvalTemplate.
+    Use `validate` to run a baseline-vs-feature evaluation for an
+    experiment against a locked eval template.
     """
     pass
 
@@ -637,10 +580,9 @@ def experiments_validate(
     """
     Launch a validation run for an experiment.
 
-    Wraps POST /api/v1.0/eval-env/runs. The engine builds per-variant
-    Docker images, submits Modal Sandboxes, collects webhook results, and
-    computes a Pass/Warn/Fail verdict against the locked template's
-    decision criteria.
+    Builds per-variant Docker images, runs the evaluation against a
+    locked eval template, and computes a Pass/Warn/Fail verdict
+    against the template's decision criteria.
 
     Example:
 
@@ -680,7 +622,7 @@ def experiments_validate_status(run_id, output_format):
 
 
 # =============================================================================
-# projects — project configuration (REMYX-19)
+# projects — project configuration
 # =============================================================================
 
 @cli.group()
@@ -771,7 +713,7 @@ def projects_set_policy(policy_name, project_id, policy_file, output_format):
 
     The policy body (JSON file) should contain rules keyed by disposition
     (ship, reject, iterate) combining predicates over metric deltas,
-    confidence bands, and sample sizes. See REMYX-14.
+    confidence bands, and sample sizes.
 
     Example:
 

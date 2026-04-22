@@ -2,9 +2,7 @@
 remyxai/api/projects.py
 
 Client calls for the Projects management API.
-Wraps /api/v1.0/projects/* endpoints including the REMYX-19 additions:
-  - POST /<id>/eval-templates/<name>
-  - POST /<id>/decision-policies/<name>
+Wraps /api/v1.0/projects/* endpoints.
 """
 from __future__ import annotations
 
@@ -108,7 +106,8 @@ def set_decision_policy(
         policy_name: Name for this policy (e.g. "default", "strict").
         policy:      Policy definition — passed as the request body.
                      Rules keyed by disposition (ship/reject/iterate) with
-                     combinators + predicates. See REMYX-14.
+                     combinators + predicates over metric deltas,
+                     confidence bands, and sample sizes.
     """
     r = requests.post(
         f"{BASE_URL}/projects/{project_id}/decision-policies/{policy_name}",

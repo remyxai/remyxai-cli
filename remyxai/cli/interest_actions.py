@@ -191,7 +191,7 @@ def handle_interests_create(
     output_format: str,
     repo: Optional[str] = None,
 ) -> None:
-    # REMYX-28 repo-sourced flow: kick off analysis, poll, use the returned
+    # Repo-sourced flow: kick off analysis, poll, use the returned
     # markdown as context, and persist the repo fields on save.
     repo_payload: Optional[dict] = None
     if repo:
@@ -365,7 +365,7 @@ def handle_interests_toggle(interest_id: str, output_format: str) -> None:
     click.echo(f"\n  '{result['name']}' is now {state}\n")
 
 
-# ─── regenerate (REMYX-28) ───────────────────────────────────────────────────
+# ─── regenerate ──────────────────────────────────────────────────────────────
 
 def handle_interests_regenerate(
     interest_id: str,
@@ -417,7 +417,7 @@ def handle_interests_regenerate(
     click.echo()
 
 
-# ─── list-repos (REMYX-28) ───────────────────────────────────────────────────
+# ─── list-repos ──────────────────────────────────────────────────────────────
 
 def handle_interests_list_repos(output_format: str) -> None:
     """List GitHub repos the caller can source an interest from."""

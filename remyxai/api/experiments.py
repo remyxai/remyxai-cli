@@ -3,10 +3,6 @@ remyxai/api/experiments.py
 
 Client calls for the Experiments management + validation API.
 Wraps /api/v1.0/experiments/* and /api/v1.0/eval-env/runs endpoints.
-
-REMYX-19: `experiments validate` is a convenience wrapper over the
-REMYX-24 /eval-env/runs pipeline — same JWT auth as every other CLI
-command, no MCP dependency.
 """
 from __future__ import annotations
 
@@ -85,13 +81,12 @@ def start_validation_run(
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Start a validation run for an experiment via the REMYX-24 pipeline.
+    Start a validation run for an experiment.
 
-    Calls POST /api/v1.0/eval-env/runs with the parent experiment_id and a
-    locked EvalTemplate. The engine kicks off per-variant Docker builds,
-    submits Modal Sandboxes to run lighteval, collects results via webhook,
-    and computes a Pass/Warn/Fail verdict against the template's decision
-    criteria.
+    Calls POST /api/v1.0/eval-env/runs with the parent experiment_id and
+    a locked EvalTemplate. The engine builds per-variant Docker images,
+    runs the evaluation inside them, collects results, and computes a
+    Pass/Warn/Fail verdict against the template's decision criteria.
 
     Args:
         experiment_id:  Parent experiment UUID (required).

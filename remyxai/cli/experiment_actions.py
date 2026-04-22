@@ -159,7 +159,7 @@ def handle_experiments_validate(
     pr_url: Optional[str],
     output_format: str,
 ) -> None:
-    """Launch a REMYX-24 eval run for an experiment."""
+    """Launch a validation eval run for an experiment."""
     variant_list = _parse_variants(variants)
     if len(variant_list) < 1:
         click.echo(
