@@ -401,3 +401,140 @@ class TestBackwardsCompatibility:
         from remyxai.api.interests import list_interests
         result = list_interests()
         assert isinstance(result, list)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# remyxai.api.interests — repo-sourced flow (REMYX-28 via REMYX-19)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestRepoInterestHelpers:
+    @patch("remyxai.api.interests.requests.post")
+    def test_analyze_repo_posts_repo_url(self, mock_post):
+        from remyxai.api.interests import analyze_repo
+
+        m = Mock()
+        m.status_code = 202
+        m.json.return_value = {
+            "task_id": "tk-1",
+            "status_url": "/api/v1.0/interests/analyze-repo/tk-1",
+        }
+        m.raise_for_status = Mock()
+        mock_post.return_value = m
+
+        result = analyze_repo("https://github.com/owner/repo")
+
+        args, kwargs = mock_post.call_args
+        assert args[0].endswith("/interests/analyze-repo")
+        assert kwargs["json"] == {"repo_url": "https://github.com/owner/repo"}
+        assert result["task_id"] == "tk-1"
+
+    @patch("remyxai.api.interests.requests.get")
+    def test_poll_repo_analysis(self, mock_get):
+        from remyxai.api.interests import poll_repo_analysis
+
+        mock_get.return_value = _ok_get(
+            {"status": "running", "message": "Fetching README"}
+        )
+        poll_repo_analysis("tk-1")
+
+        assert mock_get.call_args.args[0].endswith(
+            "/interests/analyze-repo/tk-1"
+        )
+
+    @patch("remyxai.api.interests.requests.post")
+    def test_regenerate_interest_empty_body(self, mock_post):
+        from remyxai.api.interests import regenerate_interest
+
+        m = Mock()
+        m.status_code = 202
+        m.json.return_value = {"task_id": "tk-2"}
+        m.raise_for_status = Mock()
+        mock_post.return_value = m
+
+        regenerate_interest("i1")
+
+        args, kwargs = mock_post.call_args
+        assert args[0].endswith("/interests/i1/regenerate")
+        assert kwargs["json"] == {}
+
+    @patch("remyxai.api.interests.requests.post")
+    def test_regenerate_interest_with_override(self, mock_post):
+        from remyxai.api.interests import regenerate_interest
+
+        m = Mock()
+        m.status_code = 202
+        m.json.return_value = {"task_id": "tk-3"}
+        m.raise_for_status = Mock()
+        mock_post.return_value = m
+
+        regenerate_interest("i1", repo_url="https://github.com/other/repo")
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body == {"repo_url": "https://github.com/other/repo"}
+
+    @patch("remyxai.api.interests.requests.get")
+    def test_list_github_repos_disconnected(self, mock_get):
+        from remyxai.api.interests import list_github_repos
+
+        mock_get.return_value = _ok_get({"connected": False, "repos": []})
+        result = list_github_repos()
+
+        assert mock_get.call_args.args[0].endswith("/interests/github/repos")
+        assert result == {"connected": False, "repos": []}
+
+
+class TestCreateInterestRepoFields:
+    @patch("remyxai.api.interests.requests.post")
+    def test_omits_repo_fields_when_not_provided(self, mock_post):
+        from remyxai.api.interests import create_interest
+
+        mock_post.return_value = _ok_post({"id": "i1"})
+        create_interest(name="Manual", context="plain text")
+
+        body = mock_post.call_args.kwargs["json"]
+        for field in (
+            "source_repo_url", "source_repo_metadata",
+            "generated_report", "repo_analysis",
+        ):
+            assert field not in body
+
+    @patch("remyxai.api.interests.requests.post")
+    def test_passes_repo_fields_when_provided(self, mock_post):
+        from remyxai.api.interests import create_interest
+
+        mock_post.return_value = _ok_post({"id": "i2"})
+        create_interest(
+            name="From repo",
+            context="# Report",
+            source_repo_url="https://github.com/owner/repo",
+            source_repo_metadata={"stars": 42},
+            generated_report="# Report",
+            repo_analysis={"stages": []},
+        )
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["source_repo_url"] == "https://github.com/owner/repo"
+        assert body["source_repo_metadata"] == {"stars": 42}
+        assert body["generated_report"] == "# Report"
+        assert body["repo_analysis"] == {"stages": []}
+
+
+class TestUpdateInterestRepoFields:
+    @patch("remyxai.api.interests.requests.put")
+    def test_passes_repo_fields_on_update(self, mock_put):
+        from remyxai.api.interests import update_interest
+
+        mock_put.return_value = _ok_get({"id": "i1", "pool_invalidated": 3})
+        update_interest(
+            interest_id="i1",
+            generated_report="# refreshed",
+            repo_analysis={"stages": ["a"]},
+        )
+
+        body = mock_put.call_args.kwargs["json"]
+        assert body["generated_report"] == "# refreshed"
+        assert body["repo_analysis"] == {"stages": ["a"]}
+        # Fields not passed stay out of the body
+        assert "name" not in body
+        assert "source_repo_url" not in body

@@ -1,11 +1,5 @@
-"""
-RemyxAI CLI - Main command interface
-All commands use "search" convention for asset discovery
-"""
+"""RemyxAI CLI — ExperimentOps for AI development."""
 import click
-from remyxai.cli.deployment_actions import handle_deployment_action
-from remyxai.cli.evaluation_actions import handle_model_action, handle_evaluation_action
-from remyxai.cli.dataset_actions import handle_dataset_action
 from remyxai.cli.search_actions import (
     handle_search,
     handle_info,
@@ -25,75 +19,40 @@ from remyxai.cli.interest_actions import (
     handle_interests_update,
     handle_interests_delete,
     handle_interests_toggle,
+    handle_interests_regenerate,
+    handle_interests_list_repos,
+)
+from remyxai.cli.experiment_actions import (
+    handle_experiments_list,
+    handle_experiments_get,
+    handle_experiments_validate,
+    handle_experiments_validate_status,
+)
+from remyxai.cli.project_actions import (
+    handle_projects_list,
+    handle_projects_get,
+    handle_projects_configure_eval,
+    handle_projects_set_policy,
 )
 
 @click.group()
 def cli():
     """
-    RemyxAI CLI - ExperimentOps for AI Development
-    
+    RemyxAI — ExperimentOps for AI development.
+
+    Discover research, track experiments, run validation, and close the
+    loop with automated decisions — all from the command line.
     """
     pass
-
-
-@cli.command()
-def list_models():
-    """List all available models."""
-    try:
-        handle_model_action({"subaction": "list"})
-    except Exception as e:
-        click.echo(f"Error listing models: {e}")
-
-
-@cli.command()
-@click.argument("model_name")
-def summarize_model(model_name):
-    """Summarize a model."""
-    try:
-        handle_model_action({"subaction": "summarize", "model_name": model_name})
-    except Exception as e:
-        click.echo(f"Error summarizing model: {e}")
-
-
-@cli.command()
-@click.argument("models", nargs=-1)
-@click.argument("tasks", nargs=-1)
-def evaluate_myxboard(models, tasks):
-    """Evaluate the MyxBoard with the given models and tasks."""
-    try:
-        handle_evaluation_action({"models": models, "tasks": tasks})
-    except Exception as e:
-        click.echo(f"Error evaluating MyxBoard: {e}")
-
-
-@cli.command()
-@click.argument("model_name")
-@click.argument("action")
-def deploy_model(model_name, action):
-    """Deploy or tear down a model."""
-    try:
-        handle_deployment_action({"model_name": model_name, "action": action})
-    except Exception as e:
-        click.echo(f"Error deploying model: {e}")
-
-
-@cli.command()
-@click.argument("action")
-@click.argument("dataset_name", required=False)
-def dataset(action, dataset_name=None):
-    """Manage datasets."""
-    try:
-        handle_dataset_action({"action": action, "dataset_name": dataset_name})
-    except Exception as e:
-        click.echo(f"Error managing dataset: {e}")
 
 
 @cli.group()
 def search():
     """
-    Search and discover research assets (papers + Docker images).
-    
-    Find research papers, containerized implementations, and related assets.
+    Search and discover research assets.
+
+    Find research papers and containerized implementations matched to
+    your interests.
     """
     pass
 
@@ -211,10 +170,9 @@ def stats_cmd():
 @cli.group()
 def papers():
     """
-    Daily recommendations from Remyx AI GitRank.
+    Daily research recommendations.
 
-    Gemini-ranked arXiv papers (and soon GitHub repos) matched to your
-    Research Interests.
+    Ranked papers (and GitHub repos) matched to your Research Interests.
     """
     pass
 
@@ -288,7 +246,7 @@ def papers_list(interest, limit, period, source_type, output_format, full):
               type=click.Choice(["text", "json"]), show_default=True)
 def papers_refresh(interest, num_results, wait, output_format):
     """
-    Trigger a fresh Gemini re-ranking run for your Research Interests.
+    Trigger a fresh re-ranking run for your Research Interests.
 
     Cold-start (first run, empty pool) takes 40-120s. Subsequent runs
     are served from the pre-ranked pool in ~200ms.
@@ -331,10 +289,10 @@ def interests():
     """
     Manage Research Interest profiles.
 
-    Each profile has a name, a natural-language context describing what to
-    track, and a daily recommendation count. The recommendation pipeline
-    uses the context to match papers, GitHub repos, and future sources —
-    no changes needed here when new sources are added to GitRank.
+    Each profile has a name, a natural-language context describing what
+    to track, and a daily recommendation count. The recommendation
+    pipeline uses the context to match papers, GitHub repos, and other
+    sources.
     """
     pass
 
@@ -375,13 +333,17 @@ def interests_get(interest, output_format):
               help="Short label, e.g. 'RAG & Retrieval'.")
 @click.option("--context", "-c", default=None,
               help="Natural language description, or a HuggingFace/GitHub URL.")
+@click.option("--repo", default=None,
+              help="GitHub repo URL to generate the interest profile "
+                   "from. Remyx analyzes the repo and uses the generated "
+                   "markdown as the default context.")
 @click.option("--daily-count", "-d", default=2, show_default=True,
               help="Recommendations per day (1-10).")
 @click.option("--inactive", is_flag=True, default=False,
               help="Create as inactive (excluded from daily digest until toggled).")
 @click.option("--format", "-f", "output_format", default="text",
               type=click.Choice(["text", "json"]), show_default=True)
-def interests_create(name, context, daily_count, inactive, output_format):
+def interests_create(name, context, repo, daily_count, inactive, output_format):
     """
     Create a new Research Interest profile.
 
@@ -395,6 +357,9 @@ def interests_create(name, context, daily_count, inactive, output_format):
         --name "LLM Efficiency" \\
         --context "Quantization, speculative decoding, KV cache compression" \\
         --daily-count 3
+
+      # Generate from a repo (public or via connected GitHub integration)
+      remyxai interests create --repo https://github.com/owner/repo
     """
     handle_interests_create(
         name=name,
@@ -402,7 +367,50 @@ def interests_create(name, context, daily_count, inactive, output_format):
         daily_count=daily_count,
         inactive=inactive,
         output_format=output_format,
+        repo=repo,
     )
+
+
+@interests.command("regenerate")
+@click.option("--interest", "-i", required=True,
+              help="Interest name or UUID.")
+@click.option("--repo-url", default=None,
+              help="Override the stored source_repo_url (optional).")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def interests_regenerate(interest, repo_url, output_format):
+    """
+    Re-run repo analysis for an existing repo-sourced Research Interest.
+
+    Blocks on the async task and applies the refreshed payload to the
+    interest. Use after a significant change in the source repo.
+
+    Example:
+
+      remyxai interests regenerate --interest "remyxai/remyx"
+    """
+    handle_interests_regenerate(
+        interest_id=interest,
+        repo_url=repo_url,
+        output_format=output_format,
+    )
+
+
+@interests.command("list-repos")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def interests_list_repos(output_format):
+    """
+    List GitHub repos you can pick from for repo-sourced interests.
+
+    Requires a connected GitHub integration. When not connected, the
+    command prints a hint rather than erroring.
+
+    Example:
+
+      remyxai interests list-repos
+    """
+    handle_interests_list_repos(output_format=output_format)
 
 
 @interests.command("update")
@@ -480,6 +488,243 @@ def interests_toggle(interest, output_format):
     """
     handle_interests_toggle(
         interest_id=interest,
+        output_format=output_format,
+    )
+
+
+# =============================================================================
+# experiments — experiment board + validation
+# =============================================================================
+
+@cli.group()
+def experiments():
+    """
+    Browse experiments and launch validation runs.
+
+    Use `validate` to run a baseline-vs-feature evaluation for an
+    experiment against a locked eval template.
+    """
+    pass
+
+
+@experiments.command("list")
+@click.option("--project-id", "-p", default=None,
+              help="Filter to a specific project UUID.")
+@click.option("--status", "-s", default=None,
+              help="Filter by status (backlog, implementing, validating, ...).")
+@click.option("--initiative", "-i", default=None,
+              help="Filter by initiative name.")
+@click.option("--limit", "-n", default=20, show_default=True,
+              help="Max results (capped server-side at 100).")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def experiments_list(project_id, status, initiative, limit, output_format):
+    """
+    List experiments with optional filters.
+
+    Examples:
+
+      remyxai experiments list
+      remyxai experiments list --status validating
+      remyxai experiments list --initiative "Customer Support AI"
+    """
+    handle_experiments_list(
+        project_id=project_id,
+        status=status,
+        initiative=initiative,
+        limit=limit,
+        output_format=output_format,
+    )
+
+
+@experiments.command("get")
+@click.argument("experiment_id")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def experiments_get(experiment_id, output_format):
+    """
+    Show a single experiment.
+
+    Example:
+
+      remyxai experiments get 7a9c...e1
+    """
+    handle_experiments_get(
+        experiment_id=experiment_id,
+        output_format=output_format,
+    )
+
+
+@experiments.command("validate")
+@click.argument("experiment_id")
+@click.option("--template-id", required=True,
+              help="UUID of a LOCKED EvalTemplate.")
+@click.option("--variant", "variants", multiple=True, required=True,
+              help="Variant spec: 'name=commit_sha' or 'name=ref:commit_sha'. "
+                   "Pass multiple times (at least one — typically baseline + feature).")
+@click.option("--seeds", default=1, show_default=True, type=int,
+              help="Per-variant seed count.")
+@click.option("--github-url", default=None,
+              help="Target repo URL. Falls back to the experiment's stored "
+                   "validation_config.github_url / repo if omitted.")
+@click.option("--pr-number", default=None, type=int,
+              help="PR number for lineage (optional).")
+@click.option("--pr-url", default=None,
+              help="PR URL for lineage (optional).")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def experiments_validate(
+    experiment_id, template_id, variants, seeds,
+    github_url, pr_number, pr_url, output_format,
+):
+    """
+    Launch a validation run for an experiment.
+
+    Builds per-variant Docker images, runs the evaluation against a
+    locked eval template, and computes a Pass/Warn/Fail verdict
+    against the template's decision criteria.
+
+    Example:
+
+      remyxai experiments validate 7a9c...e1 \\
+        --template-id a1b2c3...f0 \\
+        --variant baseline=9f8a1d2 \\
+        --variant feature=c4e5b7a
+    """
+    handle_experiments_validate(
+        experiment_id=experiment_id,
+        template_id=template_id,
+        github_url=github_url,
+        variants=list(variants),
+        seeds=seeds,
+        pr_number=pr_number,
+        pr_url=pr_url,
+        output_format=output_format,
+    )
+
+
+@experiments.command("validate-status")
+@click.argument("run_id")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def experiments_validate_status(run_id, output_format):
+    """
+    Poll a validation run.
+
+    Example:
+
+      remyxai experiments validate-status 3b4d...77
+    """
+    handle_experiments_validate_status(
+        run_id=run_id,
+        output_format=output_format,
+    )
+
+
+# =============================================================================
+# projects — project configuration
+# =============================================================================
+
+@cli.group()
+def projects():
+    """
+    List, inspect, and configure Remyx projects.
+
+    Projects store the eval templates and decision policies that drive
+    validation and automated disposition for experiments.
+    """
+    pass
+
+
+@projects.command("list")
+@click.option("--team-id", default=None,
+              help="Required when using a service token; otherwise "
+                   "resolved from team membership.")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def projects_list(team_id, output_format):
+    """
+    List non-archived projects for the caller's team.
+
+    Example:
+
+      remyxai projects list
+    """
+    handle_projects_list(team_id=team_id, output_format=output_format)
+
+
+@projects.command("get")
+@click.argument("project_id")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def projects_get(project_id, output_format):
+    """
+    Show a project's config (eval templates, decision policies, etc.).
+
+    Example:
+
+      remyxai projects get a1b2c3...
+    """
+    handle_projects_get(project_id=project_id, output_format=output_format)
+
+
+@projects.command("configure-eval")
+@click.argument("template_name")
+@click.option("--project-id", "-p", required=True,
+              help="UUID of the target project.")
+@click.option("--template", "-t", "template_file", required=True,
+              type=click.Path(exists=True, dir_okay=False),
+              help="Path to a JSON file with the template definition.")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def projects_configure_eval(template_name, project_id, template_file, output_format):
+    """
+    Create or replace an eval template on a project.
+
+    The template body (JSON file) should include provider, image,
+    entry_point, dataset_ref, metrics_map, compute, etc.
+
+    Example:
+
+      remyxai projects configure-eval default \\
+        --project-id a1b2c3... \\
+        --template ./eval-templates/default.json
+    """
+    handle_projects_configure_eval(
+        project_id=project_id,
+        template_name=template_name,
+        template_file=template_file,
+        output_format=output_format,
+    )
+
+
+@projects.command("set-policy")
+@click.argument("policy_name")
+@click.option("--project-id", "-p", required=True,
+              help="UUID of the target project.")
+@click.option("--policy", "policy_file", required=True,
+              type=click.Path(exists=True, dir_okay=False),
+              help="Path to a JSON file with the decision policy.")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def projects_set_policy(policy_name, project_id, policy_file, output_format):
+    """
+    Create or replace a decision policy on a project.
+
+    The policy body (JSON file) should contain rules keyed by disposition
+    (ship, reject, iterate) combining predicates over metric deltas,
+    confidence bands, and sample sizes.
+
+    Example:
+
+      remyxai projects set-policy default \\
+        --project-id a1b2c3... \\
+        --policy ./policies/default.json
+    """
+    handle_projects_set_policy(
+        project_id=project_id,
+        policy_name=policy_name,
+        policy_file=policy_file,
         output_format=output_format,
     )
 
