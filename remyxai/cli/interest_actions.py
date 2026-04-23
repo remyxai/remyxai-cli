@@ -37,7 +37,9 @@ def _wait_for_repo_analysis(
 ) -> dict:
     """Block until a repo-analysis task completes or fails.
 
-    Surfaces progress messages inline so the user sees what's happening.
+    Returns the inner `result` payload (report_markdown, repo_analysis,
+    source_repo_metadata, ...) — the Redis-backed task envelope wraps
+    that payload, which callers shouldn't have to unwrap themselves.
     """
     click.echo(f"  task_id: {task_id}")
     click.echo("  Waiting for analysis to complete (up to {}s)...".format(timeout_s))
@@ -54,7 +56,7 @@ def _wait_for_repo_analysis(
             last_message = message
 
         if status in ("complete", "completed", "done"):
-            return task
+            return task.get("result") or {}
         if status in ("failed", "error"):
             click.echo(
                 f"❌ Analysis failed: {task.get('error') or message or 'unknown error'}",
@@ -215,7 +217,11 @@ def handle_interests_create(
         # Auto-name from repo "owner/name" if not provided.
         if not name:
             meta = repo_payload.get("source_repo_metadata") or {}
-            auto = meta.get("name") or meta.get("full_name")
+            auto = (
+                repo_payload.get("full_name")
+                or meta.get("full_name")
+                or meta.get("name")
+            )
             if auto:
                 name = auto
                 click.echo(f"   Using auto-generated name: {name}\n")

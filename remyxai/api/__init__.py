@@ -67,7 +67,8 @@ else:
 
 def log_api_response(response):
     """Log the response from the API based on the status code."""
-    if response.status_code in [200, 201]:
+    # 2xx responses are all success — async-kickoff endpoints return 202.
+    if 200 <= response.status_code < 300:
         logging.debug(
             f"API call successful: {response.url}, Status: {response.status_code}"
         )
