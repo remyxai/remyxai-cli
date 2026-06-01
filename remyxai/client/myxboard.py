@@ -17,16 +17,15 @@ from remyxai.utils.myxboard import (
     add_code_snippet_to_card,
     format_results_for_storage,
 )
-from remyxai.utils.validators import _validate_models
+from remyxai.utils.validators import _validate_models, get_hf_token
 import pandas as pd
 from datasets import Dataset, DatasetDict
 from huggingface_hub import (
     create_repo,
     get_collection,
     add_collection_item,
-    HfFolder,
     DatasetCard,
-    whoami
+    whoami,
 )
 
 
@@ -276,7 +275,7 @@ class MyxBoard:
                 dataset_name = self.hf_collection_name.rsplit("-", 1)[0]
             else:
                 # Check if the Hugging Face token is missing
-                token = HfFolder.get_token() or os.getenv("HF_TOKEN")
+                token = get_hf_token()
                 if not token:
                     logging.error("Missing Hugging Face token - Please authenticate with: huggingface_cli login")
                     raise
@@ -311,7 +310,7 @@ class MyxBoard:
         return DatasetDict({"results": dataset})
 
     def _push_dataset_to_hf(self, dataset_name: str, dataset_dict: DatasetDict) -> None:
-        token = HfFolder.get_token() or os.getenv("HF_TOKEN")
+        token = get_hf_token()
 
         if not token:
             raise EnvironmentError("No Hugging Face token found.")
