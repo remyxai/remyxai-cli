@@ -26,6 +26,7 @@ from remyxai.cli.interest_actions import (
     handle_interests_delete,
     handle_interests_toggle,
 )
+from remyxai.cli.outrider_actions import handle_outrider_init
 
 @click.group()
 def cli():
@@ -470,6 +471,68 @@ def interests_toggle(interest, output_format):
     handle_interests_toggle(
         interest_id=interest,
         output_format=output_format,
+    )
+
+
+# =============================================================================
+# outrider — install the Outrider GitHub Action on the current repo
+# =============================================================================
+
+@cli.group()
+def outrider():
+    """
+    Manage the Outrider GitHub Action.
+
+    Outrider is a GitHub Action that scouts arXiv weekly for your repo,
+    picks the most implementable paper for your codebase, and opens a
+    draft PR wiring it into an existing call site. See:
+
+      https://github.com/remyxai/outrider
+    """
+    pass
+
+
+@outrider.command("init")
+@click.option("--interest", "-i", "interest_id", default=None,
+              help="Remyx ResearchInterest UUID. Get it from engine.remyx.ai.")
+@click.option("--auto-interest", is_flag=True, default=False,
+              help=(
+                  "Auto-create the ResearchInterest by analyzing this repo's "
+                  "commit history (calls engine.remyx.ai). Mutually exclusive "
+                  "with --interest."
+              ))
+@click.option("--branch", "branch_name", default="install-outrider",
+              show_default=True,
+              help="Branch name for the setup PR.")
+@click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
+              help="Skip the confirmation prompt.")
+def outrider_init(interest_id, auto_interest, branch_name, skip_confirm):
+    """
+    Install Outrider on the current repo.
+
+    Writes .github/workflows/outrider.yml, sets REMYX_API_KEY +
+    ANTHROPIC_API_KEY as repo secrets via `gh secret set`, and opens a
+    draft PR. All side effects are gated behind a confirmation prompt
+    unless --yes is passed.
+
+    Requires: an authenticated `gh` install (run `gh auth login` first).
+
+    Examples:
+
+      remyxai outrider init
+
+      remyxai outrider init --interest 6a730cc4-010c-49ce-9c7f-6d9c59431739
+
+      remyxai outrider init --auto-interest
+
+      REMYXAI_API_KEY=... ANTHROPIC_API_KEY=... \\
+        remyxai outrider init --interest <uuid> --yes
+    """
+    handle_outrider_init(
+        interest_id=interest_id,
+        auto_interest=auto_interest,
+        branch_name=branch_name,
+        skip_confirm=skip_confirm,
     )
 
 
