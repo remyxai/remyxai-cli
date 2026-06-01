@@ -162,16 +162,6 @@ class TestApiKeySignatures:
         funcs = [user.get_user_profile, user.get_user_credits]
         self._assert_all_have_api_key(funcs)
 
-    def test_myxboard_module(self):
-        from remyxai.api import myxboard
-
-        funcs = [
-            myxboard.store_myxboard, myxboard.list_myxboards,
-            myxboard.update_myxboard, myxboard.delete_myxboard,
-            myxboard.download_myxboard,
-        ]
-        self._assert_all_have_api_key(funcs)
-
     @staticmethod
     def _assert_all_have_api_key(funcs):
         for fn in funcs:
@@ -244,17 +234,6 @@ class TestApiKeyThreading:
 
         call_kwargs = mock_get.call_args[1]
         assert call_kwargs["headers"]["Authorization"] == "Bearer user-key-789"
-
-    @patch("remyxai.api.myxboard.requests.get")
-    def test_list_myxboards_uses_explicit_key(self, mock_get, mock_get_response):
-        from remyxai.api.myxboard import list_myxboards
-
-        mock_get.return_value = mock_get_response
-        list_myxboards(api_key="myxboard-key")
-
-        call_kwargs = mock_get.call_args[1]
-        assert call_kwargs["headers"]["Authorization"] == "Bearer myxboard-key"
-
 
 # ---------------------------------------------------------------------------
 # Tests: SearchClient

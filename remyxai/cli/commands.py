@@ -4,7 +4,7 @@ All commands use "search" convention for asset discovery
 """
 import click
 from remyxai.cli.deployment_actions import handle_deployment_action
-from remyxai.cli.evaluation_actions import handle_model_action, handle_evaluation_action
+from remyxai.cli.evaluation_actions import handle_model_action
 from remyxai.cli.dataset_actions import handle_dataset_action
 from remyxai.cli.search_actions import (
     handle_search,
@@ -53,17 +53,6 @@ def summarize_model(model_name):
         handle_model_action({"subaction": "summarize", "model_name": model_name})
     except Exception as e:
         click.echo(f"Error summarizing model: {e}")
-
-
-@cli.command()
-@click.argument("models", nargs=-1)
-@click.argument("tasks", nargs=-1)
-def evaluate_myxboard(models, tasks):
-    """Evaluate the MyxBoard with the given models and tasks."""
-    try:
-        handle_evaluation_action({"models": models, "tasks": tasks})
-    except Exception as e:
-        click.echo(f"Error evaluating MyxBoard: {e}")
 
 
 @cli.command()
