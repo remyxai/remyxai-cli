@@ -42,7 +42,7 @@ def list_models():
     try:
         handle_model_action({"subaction": "list"})
     except Exception as e:
-        click.echo(f"Error listing models: {e}")
+        raise click.ClickException(f"listing models failed: {e}")
 
 
 @cli.command()
@@ -52,7 +52,7 @@ def summarize_model(model_name):
     try:
         handle_model_action({"subaction": "summarize", "model_name": model_name})
     except Exception as e:
-        click.echo(f"Error summarizing model: {e}")
+        raise click.ClickException(f"summarizing model failed: {e}")
 
 
 @cli.command()
@@ -63,7 +63,7 @@ def deploy_model(model_name, action):
     try:
         handle_deployment_action({"model_name": model_name, "action": action})
     except Exception as e:
-        click.echo(f"Error deploying model: {e}")
+        raise click.ClickException(f"deploying model failed: {e}")
 
 
 @cli.command()
@@ -74,7 +74,7 @@ def dataset(action, dataset_name=None):
     try:
         handle_dataset_action({"action": action, "dataset_name": dataset_name})
     except Exception as e:
-        click.echo(f"Error managing dataset: {e}")
+        raise click.ClickException(f"dataset action failed: {e}")
 
 
 @cli.group()

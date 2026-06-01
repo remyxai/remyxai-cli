@@ -54,8 +54,13 @@ def test_deploy_model_down(mock_handle_deployment_action):
 
 
 def test_deploy_model_invalid_action():
+    """Invalid action must surface as an error with a non-zero exit code.
+
+    The command uses `click.ClickException`, which prefixes the message
+    with `Error: ` and exits 1. This is the contract this test enforces.
+    """
     runner = CliRunner()
     result = runner.invoke(cli, ["deploy-model", "model_name", "invalid_action"])
 
-    assert "Error deploying model" in result.output
+    assert "deploying model failed" in result.output
     assert result.exit_code != 0

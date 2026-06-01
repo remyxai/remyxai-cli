@@ -20,10 +20,18 @@ import uuid
 import pytest
 
 # ─── skip entire module if no API key ────────────────────────────────────────
+#
+# Skips when the env var is missing OR is a unit-test placeholder. The
+# tests/conftest.py sets `REMYXAI_API_KEY=test-...` at collection time so
+# the module-level HEADERS in remyxai/api/__init__.py is built with a
+# non-empty Bearer token (required for the unit-test header-threading
+# assertions). Live integration tests against engine.remyx.ai only run
+# when the env var is a real, non-test key.
 
+_API_KEY = os.environ.get("REMYXAI_API_KEY", "")
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("REMYXAI_API_KEY"),
-    reason="REMYXAI_API_KEY not set — skipping live integration tests",
+    not _API_KEY or _API_KEY.startswith("test-"),
+    reason="REMYXAI_API_KEY not set (or is a unit-test placeholder) — skipping live integration tests",
 )
 
 
