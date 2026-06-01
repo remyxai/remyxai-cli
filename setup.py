@@ -6,23 +6,14 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.2.5",
+    version="0.2.6",
     packages=find_packages(include=["remyxai", "remyxai.*"]),
+    include_package_data=True,
+    package_data={"remyxai.cli": ["templates/*.yml"]},
     install_requires=[
-        "numpy",
-        "onnx",
-        "onnxruntime",
-        "pillow",
-        "requests",
-        "tqdm",
-        "huggingface_hub",
-        "datasets",
-        "pandas",
         "click",
+        "requests",
     ],
-    extras_require={
-    "triton": ["tritonclient[all]"],
-    },
     entry_points={
         "console_scripts": [
             "remyxai=remyxai.cli.commands:cli",
@@ -35,5 +26,5 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.6",
+    python_requires=">=3.10",
 )

@@ -202,7 +202,9 @@ def _slack_entry(rec: dict, rank: int) -> str:
 def build_slack_digest(data: dict) -> str:
     """
     Build the full Slack message from a digest API response.
-    Called by the OpenClaw skill when posting to #research.
+
+    Returns Slack mrkdwn-formatted text suitable for piping to the
+    Slack API by external automation (cron, scheduled tasks, etc.).
     """
     today_str = date.today().strftime("%B %-d")
     interests = data.get("interests", [])
