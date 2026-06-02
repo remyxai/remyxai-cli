@@ -493,6 +493,11 @@ def outrider():
 
 
 @outrider.command("init")
+@click.option("--repo", "repo", default=None,
+              help=(
+                  "Target repo as owner/name. Defaults to detecting from the "
+                  "current working directory's git remote."
+              ))
 @click.option("--interest", "-i", "interest_id", default=None,
               help="Remyx ResearchInterest UUID. Get it from engine.remyx.ai.")
 @click.option("--auto-interest", is_flag=True, default=False,
@@ -504,35 +509,49 @@ def outrider():
 @click.option("--branch", "branch_name", default="install-outrider",
               show_default=True,
               help="Branch name for the setup PR.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help=(
+                  "Print the resolved repo, branch, rendered workflow, and "
+                  "planned secret names. Performs zero mutations on the "
+                  "target repo. Useful for verifying the install plan before "
+                  "committing."
+              ))
 @click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
-              help="Skip the confirmation prompt.")
-def outrider_init(interest_id, auto_interest, branch_name, skip_confirm):
+              help="Skip the confirmation prompt (default is opt-in).")
+def outrider_init(
+    repo, interest_id, auto_interest, branch_name, dry_run, skip_confirm,
+):
     """
-    Install Outrider on the current repo.
+    Install Outrider on a GitHub repo.
 
-    Writes .github/workflows/outrider.yml, sets REMYX_API_KEY +
-    ANTHROPIC_API_KEY as repo secrets via `gh secret set`, and opens a
-    draft PR. All side effects are gated behind a confirmation prompt
-    unless --yes is passed.
+    Creates a branch + workflow file + draft PR on the target repo,
+    then sets REMYX_API_KEY + ANTHROPIC_API_KEY as repo secrets. All
+    mutations go through the GitHub API — your local working tree is
+    not touched. The default confirmation prompt is opt-in (must
+    affirmatively type 'y'); use --yes to skip in automation.
 
-    Requires: an authenticated `gh` install (run `gh auth login` first).
+    Requires: an authenticated `gh` install (run `gh auth login` or set
+    a valid $GITHUB_TOKEN with `repo` + `workflow` scopes) and admin
+    access to the target repo for secret-setting.
 
     Examples:
 
       remyxai outrider init
 
-      remyxai outrider init --interest 6a730cc4-010c-49ce-9c7f-6d9c59431739
+      remyxai outrider init --repo remyxai/RepoRanger --interest <uuid>
 
-      remyxai outrider init --auto-interest
+      remyxai outrider init --auto-interest --dry-run
 
       REMYXAI_API_KEY=... ANTHROPIC_API_KEY=... \\
         remyxai outrider init --interest <uuid> --yes
     """
     handle_outrider_init(
+        repo=repo,
         interest_id=interest_id,
         auto_interest=auto_interest,
         branch_name=branch_name,
         skip_confirm=skip_confirm,
+        dry_run=dry_run,
     )
 
 

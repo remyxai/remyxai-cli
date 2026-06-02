@@ -179,6 +179,27 @@ result, time_elapsed = run_inference(model_name, prompt, server_url="localhost:8
 print(result)
 ```
 
+### Outrider
+Install [Outrider](https://github.com/remyxai/outrider) — the recommendation-driven implementation agent — into a GitHub repository. The command opens a PR that adds `.github/workflows/outrider.yml`, then writes `REMYX_API_KEY` and `ANTHROPIC_API_KEY` to the repo's Actions secrets.
+
+* cli command:
+```bash
+# Auto-detect repo from the current git remote
+$ remyxai outrider init --auto-interest
+
+# Or target a specific repo + interest
+$ remyxai outrider init --repo owner/repo --interest <uuid>
+
+# Preview without making any changes
+$ remyxai outrider init --auto-interest --dry-run
+```
+
+Requirements:
+- `gh` (GitHub CLI), authenticated with `repo` + `admin:repo_hook` scopes (the latter is what GitHub requires for writing Actions secrets)
+- `REMYXAI_API_KEY` and `ANTHROPIC_API_KEY` in the local environment — these are read once and written to the target repo's Actions secrets via `gh secret set`
+
+**Credential model (v1):** the operator's own `REMYXAI_API_KEY` is copied into the target repo's Actions secrets. Anyone with write access to the repo's workflows can therefore consume Remyx credits attributed to that key. This is acceptable for repos you control end-to-end; for shared or third-party repos, prefer provisioning a scoped key in the Remyx dashboard before running `outrider init`. A first-class scoped-token flow is tracked in REMYX-76.
+
 ### User
 
 Get user profile info:
