@@ -98,10 +98,20 @@ def _gh_available() -> bool:
 
 
 def _gh_authenticated() -> bool:
+    """Return True if `gh` can call the GitHub API as some user.
+
+    Uses `gh api user` rather than `gh auth status` because the latter
+    reports a stricter "invalid token" failure for tokens that DO work
+    for actual operations (`gh secret set`, `gh pr create`, etc.) — most
+    commonly fine-grained PATs in $GITHUB_TOKEN. `gh api user` succeeds
+    whenever the token can perform an authenticated read, which is the
+    operational equivalent of what this pre-check actually wants to know.
+    """
     if not _gh_available():
         return False
     return subprocess.run(
-        ["gh", "auth", "status"], capture_output=True, text=True,
+        ["gh", "api", "user", "--silent"],
+        capture_output=True, text=True,
     ).returncode == 0
 
 
