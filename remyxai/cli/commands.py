@@ -27,6 +27,7 @@ from remyxai.cli.interest_actions import (
     handle_interests_toggle,
 )
 from remyxai.cli.outrider_actions import handle_outrider_init
+from remyxai.cli.outrider_local import handle_outrider_setup_local
 
 @click.group()
 def cli():
@@ -495,61 +496,128 @@ def outrider():
 @outrider.command("init")
 @click.option("--repo", "repo", default=None,
               help=(
-                  "Target repo as owner/name. Defaults to detecting from the "
-                  "current working directory's git remote."
+                  "Target repo as owner/name or a GitHub URL. Defaults to "
+                  "detecting from the current directory's git remote."
               ))
 @click.option("--interest", "-i", "interest_id", default=None,
               help="Remyx ResearchInterest UUID. Get it from engine.remyx.ai.")
 @click.option("--auto-interest", is_flag=True, default=False,
               help=(
-                  "Auto-create the ResearchInterest by analyzing this repo's "
-                  "commit history (calls engine.remyx.ai). Mutually exclusive "
-                  "with --interest."
+                  "Auto-create the ResearchInterest from this repo (calls "
+                  "engine.remyx.ai). Mutually exclusive with --interest."
               ))
-@click.option("--branch", "branch_name", default="install-outrider",
-              show_default=True,
-              help="Branch name for the setup PR.")
-@click.option("--dry-run", is_flag=True, default=False,
+@click.option("--mode", type=click.Choice(["auto", "review", "off"]),
+              default="auto", show_default=True,
               help=(
-                  "Print the resolved repo, branch, rendered workflow, and "
-                  "planned secret names. Performs zero mutations on the "
-                  "target repo. Useful for verifying the install plan before "
-                  "committing."
+                  "auto: provision + merge the setup PR + start the first run "
+                  "(\"set it up for me\"). review: provision + open a setup PR "
+                  "to review. off: create the interest only."
               ))
+@click.option("--anthropic-key", "anthropic_key", default=None,
+              help=(
+                  "Anthropic API key to connect as the model provider "
+                  "(Claude Code). Falls back to $ANTHROPIC_API_KEY. Only used "
+                  "if one isn't already connected."
+              ))
+@click.option("--no-wait", is_flag=True, default=False,
+              help=(
+                  "Don't block polling for the App install or provisioning to "
+                  "finish; print next steps and return."
+              ))
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the plan and exit without making any changes.")
 @click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
               help="Skip the confirmation prompt (default is opt-in).")
 def outrider_init(
-    repo, interest_id, auto_interest, branch_name, dry_run, skip_confirm,
+    repo, interest_id, auto_interest, mode, anthropic_key,
+    no_wait, dry_run, skip_confirm,
 ):
     """
-    Install Outrider on a GitHub repo.
+    Set up Outrider on a GitHub repo.
 
-    Creates a branch + workflow file + draft PR on the target repo,
-    then sets REMYX_API_KEY + ANTHROPIC_API_KEY as repo secrets. All
-    mutations go through the GitHub API — your local working tree is
-    not touched. The default confirmation prompt is opt-in (must
-    affirmatively type 'y'); use --yes to skip in automation.
+    Drives the Remyx engine to do the same "set it up for me" flow as the
+    web app: the Remyx GitHub App (remyx-ai[bot]) sets the repo secrets,
+    writes the workflow, opens a bot-authored setup PR, and — in auto mode
+    — merges it and fires the first run. Your local git is never touched
+    and no personal `gh` token is needed; only your REMYXAI_API_KEY.
 
-    Requires: an authenticated `gh` install (run `gh auth login` or set
-    a valid $GITHUB_TOKEN with `repo` + `workflow` scopes) and admin
-    access to the target repo for secret-setting.
+    Requires: the Remyx GitHub App installed on the repo (the command
+    surfaces the install link if it isn't) and a connected model provider
+    (pass --anthropic-key or set ANTHROPIC_API_KEY the first time).
 
     Examples:
 
-      remyxai outrider init
+      remyxai outrider init --repo remyxai/RepoRanger --auto-interest
 
-      remyxai outrider init --repo remyxai/RepoRanger --interest <uuid>
-
-      remyxai outrider init --auto-interest --dry-run
+      remyxai outrider init --repo owner/name --interest <uuid> --mode review
 
       REMYXAI_API_KEY=... ANTHROPIC_API_KEY=... \\
-        remyxai outrider init --interest <uuid> --yes
+        remyxai outrider init --repo owner/name --interest <uuid> --yes
     """
     handle_outrider_init(
         repo=repo,
         interest_id=interest_id,
         auto_interest=auto_interest,
-        branch_name=branch_name,
+        mode=mode,
+        anthropic_key=anthropic_key,
+        skip_confirm=skip_confirm,
+        dry_run=dry_run,
+        no_wait=no_wait,
+    )
+
+
+@outrider.command("setup-local")
+@click.option("--repo", "repo", default=None,
+              help="Target repo as owner/name or a GitHub URL. Defaults to "
+                   "the current directory's git remote.")
+@click.option("--interest", "-i", "interest_id", default=None,
+              help="Remyx ResearchInterest UUID. Get it from engine.remyx.ai.")
+@click.option("--auto-interest", is_flag=True, default=False,
+              help="Auto-create the ResearchInterest from this repo. Mutually "
+                   "exclusive with --interest.")
+@click.option("--mode", type=click.Choice(["auto", "review"]),
+              default="auto", show_default=True,
+              help="auto: open + merge the setup PR + dispatch the first run. "
+                   "review: open the setup PR for you to merge.")
+@click.option("--anthropic-key", "anthropic_key", default=None,
+              help="Anthropic API key to set as the ANTHROPIC_API_KEY repo "
+                   "secret. Falls back to $ANTHROPIC_API_KEY, then prompts.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the plan + rendered workflow and exit; no changes.")
+@click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
+              help="Skip the confirmation prompt (default is opt-in).")
+def outrider_setup_local(
+    repo, interest_id, auto_interest, mode, anthropic_key,
+    dry_run, skip_confirm,
+):
+    """
+    Set up Outrider WITHOUT the Remyx GitHub App.
+
+    For enterprises that can't grant a third-party App yet (e.g. a pending
+    security review). Uses your own authenticated `gh` CLI to set the repo
+    secrets, write the workflow, and open (in auto mode, merge) the setup
+    PR — no Remyx App, nothing new to security-review. The only Remyx
+    dependency is the REMYX_API_KEY the workflow uses at runtime.
+
+    The running Action opens its PRs with the repo's built-in GITHUB_TOKEN;
+    the command enables the repo's "Actions can create PRs" setting for that.
+
+    Requires: an authenticated `gh` (run `gh auth login`, or set $GITHUB_TOKEN
+    with repo + workflow scopes) and admin on the target repo.
+
+    Examples:
+
+      remyxai outrider setup-local --repo owner/name --auto-interest
+
+      remyxai outrider setup-local --repo owner/name --interest <uuid> \\
+        --mode review
+    """
+    handle_outrider_setup_local(
+        repo=repo,
+        interest_id=interest_id,
+        auto_interest=auto_interest,
+        mode=mode,
+        anthropic_key=anthropic_key,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
     )

@@ -164,3 +164,93 @@ def toggle_interest(
     log_api_response(r)
     r.raise_for_status()
     return r.json()
+
+
+# ─── Outrider provisioning (REMYX-60) ──────────────────────────────────────
+
+def provision_action(
+    interest_id: str,
+    repo_url: Optional[str] = None,
+    auto_merge: bool = True,
+    branch: Optional[str] = None,
+    workflow_filename: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Provision the Outrider recommendation Action on a repo, server-side
+    (the Remyx GitHub App sets secrets, writes the workflow, opens a
+    bot-authored setup PR, and — when auto_merge — merges it and fires
+    the first run).
+
+    Calls POST /api/v1.0/interests/<id>/provision-action
+
+    Args:
+        repo_url:   GitHub URL; defaults to the interest's source repo.
+        auto_merge: merge the setup PR + dispatch the first run ("set it
+                    up for me"). False opens the PR for the user to review.
+
+    Returns 202 { task_id, status_url }. Poll with poll_provision_action.
+    """
+    payload: Dict[str, Any] = {"auto_merge": auto_merge}
+    if repo_url:
+        payload["repo_url"] = repo_url
+    if branch:
+        payload["branch"] = branch
+    if workflow_filename:
+        payload["workflow_filename"] = workflow_filename
+
+    r = requests.post(
+        f"{BASE_URL}/interests/{interest_id}/provision-action",
+        json=payload,
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
+
+
+def poll_provision_action(
+    interest_id: str,
+    task_id: str,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Poll a provision-action task.
+
+    Calls GET /api/v1.0/interests/<id>/provision-action/<task_id>
+
+    Returns the task dict: { status, progress, message, result, error }.
+    On completion, `result` carries pr_url, secret_set, merged, dispatched,
+    model_key_missing, key_label, repo.
+    """
+    r = requests.get(
+        f"{BASE_URL}/interests/{interest_id}/provision-action/{task_id}",
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
+
+
+def get_provision_status(
+    interest_id: str,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Latest provisioning state for an interest.
+
+    Calls GET /api/v1.0/interests/<id>/provision-action
+
+    Returns { provisioned: False } if none, else the provisioned-action
+    record with provisioned: True.
+    """
+    r = requests.get(
+        f"{BASE_URL}/interests/{interest_id}/provision-action",
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
