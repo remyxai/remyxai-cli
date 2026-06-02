@@ -8,8 +8,6 @@ setup(
     name="remyxai",
     version="0.2.6",
     packages=find_packages(include=["remyxai", "remyxai.*"]),
-    include_package_data=True,
-    package_data={"remyxai.cli": ["templates/*.yml"]},
     install_requires=[
         "click",
         "requests",

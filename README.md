@@ -179,6 +179,68 @@ result, time_elapsed = run_inference(model_name, prompt, server_url="localhost:8
 print(result)
 ```
 
+### Outrider — weekly arXiv → draft PR for your repo
+
+[Outrider](https://github.com/remyxai/outrider) is a GitHub Action that, on a weekly schedule, finds the most implementable recent paper for your repository and opens a draft PR wiring it into a real call site. `remyxai outrider` sets it up for you.
+
+There are two ways to install it — both end with the same Action running in your repo; they differ in **who provisions it**:
+
+|  | `outrider init` | `outrider setup-local` |
+|---|---|---|
+| **Best for** | Most users | Teams that can't grant a third-party GitHub App yet (e.g. a pending security review) |
+| **How it works** | The **Remyx GitHub App** provisions it server-side; PRs are authored by `remyx-ai[bot]` | The CLI uses **your own `gh`** to provision it; PRs authored by `github-actions[bot]` |
+| **You provide** | The Remyx App installed on the repo (the command links you to it) | An authenticated `gh` with admin on the repo |
+
+Either way you'll need a **Remyx API key** (from engine.remyx.ai → Settings) and an **Anthropic API key** (from console.anthropic.com). Set the Remyx key once:
+
+```bash
+export REMYXAI_API_KEY=...   # from engine.remyx.ai → Settings
+```
+
+#### Option A — `outrider init` (via the Remyx GitHub App) — recommended
+
+```bash
+# Set up on a repo, auto-creating a research interest from it:
+$ remyxai outrider init --repo owner/name --auto-interest
+
+# …or use an existing research interest (UUID from engine.remyx.ai):
+$ remyxai outrider init --repo owner/name --interest <uuid>
+```
+
+If the Remyx App isn't installed on the repo yet, the command prints an install link and waits. Then the engine provisions the workflow, repo secrets, and a setup PR, and — in the default `auto` mode — merges it and starts the first run. Connect your Anthropic key once on the engine's Integrations page, or pass `--anthropic-key` (or set `ANTHROPIC_API_KEY`) and the CLI connects it for you.
+
+`--mode`: `auto` (default — set it up and start the first run), `review` (open the setup PR for you to merge), `off` (just create the research interest).
+
+#### Option B — `outrider setup-local` (no GitHub App)
+
+For teams that can't install a third-party App yet. The CLI uses your own authenticated `gh` to do everything — nothing new to security-review.
+
+```bash
+$ export ANTHROPIC_API_KEY=...   # stored as a repo secret by the CLI
+
+$ remyxai outrider setup-local --repo owner/name --auto-interest
+```
+
+Using your `gh` credentials, the CLI sets the `REMYX_API_KEY` + `ANTHROPIC_API_KEY` repo secrets, writes `.github/workflows/outrider.yml`, opens a setup PR, and — in `auto` mode — merges it and dispatches the first run. So the Action can open its recommendation PRs, the CLI enables the repo's *"Allow GitHub Actions to create and approve pull requests"* setting; the Action then uses the repo's built-in `GITHUB_TOKEN` (no GitHub token is stored as a secret — only `REMYX_API_KEY` and `ANTHROPIC_API_KEY`).
+
+Requires `gh` authenticated (`gh auth login`, or `$GITHUB_TOKEN` with `repo` + `workflow` scopes) and admin on the target repo.
+
+#### Common options
+
+- `--repo owner/name` — target repo (or a GitHub URL); defaults to the current directory's git remote.
+- `--interest <uuid>` / `--auto-interest` — use an existing research interest, or create one from the repo.
+- `--mode auto|review` (`init` also has `off`) — how far to take setup.
+- `--dry-run` — print the plan (and, for `setup-local`, the rendered workflow) and exit without making changes.
+- `-y` / `--yes` — skip the confirmation prompt.
+
+Preview either path safely before committing to it:
+
+```bash
+$ remyxai outrider setup-local --repo owner/name --auto-interest --dry-run
+```
+
+**A note on credentials:** with `setup-local`, your `REMYXAI_API_KEY` is stored as the repo's `REMYX_API_KEY` secret so the Action can fetch recommendations — anyone with write access to the repo's workflows can consume Remyx credits on that key, so use it on repos you control. With `outrider init`, the Remyx App provisions a scoped key for you. In both paths your Anthropic key is stored as a repo secret to run the agent.
+
 ### User
 
 Get user profile info:
