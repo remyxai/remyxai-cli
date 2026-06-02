@@ -1,0 +1,6 @@
+# Build configuration. Package metadata lives in setup.py (single source of
+# truth for version, deps, entry points); this file just declares the build
+# backend so `python -m build` is reproducible.
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
