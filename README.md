@@ -1,6 +1,6 @@
 # Remyx AI command-line client
 
-CLI for the Remyx AI platform. Install [Outrider](https://github.com/remyxai/outrider) on a repo, manage Research Interests, browse Gemini-ranked paper recommendations from GitRank, and search for research assets — all from the terminal.
+CLI for the Remyx AI platform. Install [Outrider](https://github.com/remyxai/outrider) on a repo, manage Research Interests, browse recommended papers, and search for research assets — all from the terminal.
 
 ## Install
 
@@ -60,7 +60,7 @@ Run any command with `--help` for full flag listings and examples.
 |---|---|
 | `remyxai papers digest` | Recommendations grouped by Research Interest |
 | `remyxai papers list` | Recommendations flat view (filter by interest, period, source type) |
-| `remyxai papers refresh [--wait]` | Trigger a fresh Gemini re-ranking |
+| `remyxai papers refresh [--wait]` | Trigger a fresh ranking |
 | `remyxai papers refresh-status <task_id>` | Poll a refresh task |
 | `remyxai interests list` | List your Research Interests |
 | `remyxai interests get <name-or-uuid>` | Show one interest |
