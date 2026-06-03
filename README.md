@@ -1,286 +1,107 @@
 # Remyx AI command-line client
 
-## Installation
-To install the Remyx AI CLI in Python virtual environment, run:
+CLI for the Remyx AI platform. Install [Outrider](https://github.com/remyxai/outrider) on a repo, manage Research Interests, browse Gemini-ranked paper recommendations from GitRank, and search for research assets — all from the terminal.
 
-```
+## Install
+
+```bash
 pip install remyxai
 ```
 
-## Token authentication
-Remyx AI API requires authentication token, which can be obtained on this page: https://engine.remyx.ai/account
+## Authenticate
 
-Provide api key to the CLI through an environment variable `REMYXAI_API_KEY`.
-```
-export REMYXAI_API_KEY=<your-key-here>
-```
-
-## Usage
-Quickly get started with the following examples:
-
-### Model
-List all models:
-* cli command:
-```bash
-$ remyxai model list
-```
-* python command:
-```python
-from remyxai.api import list_models
-print(list_models())
-```
-
-Get the summary of a model:
-* cli command:
-```bash
-$ remyxai model summarize --model_name=<your-model-name>
-```
-* python command:
-```python
-from remyxai.api import get_model_summary
-print(get_model_summary(model_name))
-```
-
-Delete a model by name:
-* cli command:
-```bash
-$ remyxai model delete --model_name=<your-model-name>
-```
-* python command:
-```python
-from remyxai.api import delete_model
-
-model_name = "<your-model-name>"
-print(delete_model(model_name))
-```
-
-Download and convert a model:
-* cli command:
-```bash
-# possible model formats are "blob", "onnx", or "tflite"
-$ remyxai model download --model_name=<your-model-name> --model_format="onnx"
-```
-* python command:
-```python
-from remyxai.api import download_model 
-
-model_name = "<your-model-name>"
-model_format = "onnx"
-print(download_model(model_name, model_format))
-```
-
-### Tasks
-Train an image classifier:
-* cli command:
-```bash
-$ remyxai classify --model_name=<your-model-name> --labels="comma,separated,labels" --model_size=<int between 1-5>
-```
-
-add the optional `--hf_dataset` if you want to train with your own image dataset on 🤗. [See the docs](https://huggingface.co/docs/datasets/v2.14.5/image_dataset#imagefolder) for more details
-
-* python command:
-```python
-from remyxai.api import train_classifier
-
-model_name = "<your-model-name>"
-labels = ["comma", "separated", "labels"]
-model_size = 3 # use 1 for microcontrollers
-
-# Optional HF dataset
-hf_dataset = "your/hf-dataset"
-
-print(train_classifier(model_name, labels, model_size, hf_dataset))
-```
-
-Train an object detector:
-* cli command:
-```bash
-$ remyxai detect --model_name=<your-model-name> --labels="comma,separated,labels" --model_size=<int between 1-5>
-```
-
-add the optional `--hf_dataset` if you want to train with your own image dataset on 🤗. [See the docs](https://huggingface.co/docs/datasets/v2.14.5/image_dataset#object-detection) for more details
-
-* python command:
-```python
-from remyxai.api import train_detector
-
-model_name = "<your-model-name>"
-labels = ["comma", "separated", "labels"]
-model_size = 3
-
-# Optional HF dataset
-hf_dataset = "your/hf-dataset"
-print(train_detector(model_name, labels, model_size, hf_dataset))
-```
-
-Train a text generator:
-* cli command:
-```bash
-$ remyxai generate --model_name=<your-model-name> --hf_dataset=<your/hf-dataset>
-```
-
-Your Huggingface dataset should have two columns with naming conventions like:
-* "question", "response"
-* "question", "answer"
-* "input", "output"
-* "prompt", "response"
-
-* python command:
-```python
-from remyxai.api import train_generator
-
-model_name = "<your-model-name>"
-hf_dataset = "your/hf-dataset"
-
-print(train_generator(model_name, hf_dataset))
-```
-### Deploy 
-Launch a [Triton Server](https://developer.nvidia.com/triton-inference-server) containerized deployment for your model. Currently supported for `generate` models. More model types support coming soon!
-
-#### System requirements
-Please make sure you have Docker, Docker Compose, and the NVIDIA Container Toolkit are installed. 
-* [Docker installation](https://docs.docker.com/engine/install/ubuntu/)
-* [Docker Compose installation](https://docs.docker.com/compose/install/linux/)
-* [NVIDIA Container Toolkit installation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-
-Deploy a model with:
-* cli command:
-```bash
-# Bring up
-remyxai deploy --model_name="<your-model-name>"
-
-# Bring down
-remyxai deploy down --model_name="<your-model-name>"
-```
-
-* python command:
-```python
-from remyxai.api import deploy_model
-
-model_name = "<your-model-name>"
-
-deploy_model(model_name, action='up') # action can be "up" or "down"
-```
-
-And you can run inference with:
-* cli command:
-```bash
-remyxai infer --model_name="<your-model-name>" --prompt="Your prompt here"
-```
-
-* python command:
-```python
-from remyxai.api import run_inference
-
-model_name = "<your-model-name>"
-prompt="Your prompt here"
-
-result, time_elapsed = run_inference(model_name, prompt, server_url="localhost:8000", model_version="1")
-print(result)
-```
-
-### Outrider — weekly arXiv → draft PR for your repo
-
-[Outrider](https://github.com/remyxai/outrider) is a GitHub Action that, on a weekly schedule, finds the most implementable recent paper for your repository and opens a draft PR wiring it into a real call site. `remyxai outrider` sets it up for you.
-
-There are two ways to install it — both end with the same Action running in your repo; they differ in **who provisions it**:
-
-|  | `outrider init` | `outrider setup-local` |
-|---|---|---|
-| **Best for** | Most users | Teams that can't grant a third-party GitHub App yet (e.g. a pending security review) |
-| **How it works** | The **Remyx GitHub App** provisions it server-side; PRs are authored by `remyx-ai[bot]` | The CLI uses **your own `gh`** to provision it; PRs authored by `github-actions[bot]` |
-| **You provide** | The Remyx App installed on the repo (the command links you to it) | An authenticated `gh` with admin on the repo |
-
-Either way you'll need a **Remyx API key** (from engine.remyx.ai → Settings) and an **Anthropic API key** (from console.anthropic.com). Set the Remyx key once:
+Get an API key from [engine.remyx.ai/account](https://engine.remyx.ai/account) and export it:
 
 ```bash
-export REMYXAI_API_KEY=...   # from engine.remyx.ai → Settings
+export REMYXAI_API_KEY=<your-key>
 ```
 
-#### Option A — `outrider init` (via the Remyx GitHub App) — recommended
+All commands read this environment variable.
+
+## Quickstart
+
+**See today's paper recommendations**
 
 ```bash
-# Set up on a repo, auto-creating a research interest from it:
-$ remyxai outrider init --repo owner/name --auto-interest
-
-# …or use an existing research interest (UUID from engine.remyx.ai):
-$ remyxai outrider init --repo owner/name --interest <uuid>
+remyxai papers digest
 ```
 
-If the Remyx App isn't installed on the repo yet, the command prints an install link and waits. Then the engine provisions the workflow, repo secrets, and a setup PR, and — in the default `auto` mode — merges it and starts the first run. Connect your Anthropic key once on the engine's Integrations page, or pass `--anthropic-key` (or set `ANTHROPIC_API_KEY`) and the CLI connects it for you.
+Shows recommended papers grouped by Research Interest. Use `remyxai papers list --interest <name-or-uuid>` for the flat view.
 
-`--mode`: `auto` (default — set it up and start the first run), `review` (open the setup PR for you to merge), `off` (just create the research interest).
-
-#### Option B — `outrider setup-local` (no GitHub App)
-
-For teams that can't install a third-party App yet. The CLI uses your own authenticated `gh` to do everything — nothing new to security-review.
+**Create a Research Interest**
 
 ```bash
-$ export ANTHROPIC_API_KEY=...   # stored as a repo secret by the CLI
+# Free-form context
+remyxai interests create \
+  --name "LLM Efficiency" \
+  --context "Quantization, speculative decoding, KV cache compression"
 
-$ remyxai outrider setup-local --repo owner/name --auto-interest
+# Or seed from a GitHub repo (auto-extracts context)
+remyxai interests create --context "https://github.com/your-org/your-repo"
 ```
 
-Using your `gh` credentials, the CLI sets the `REMYX_API_KEY` + `ANTHROPIC_API_KEY` repo secrets, writes `.github/workflows/outrider.yml`, opens a setup PR, and — in `auto` mode — merges it and dispatches the first run. So the Action can open its recommendation PRs, the CLI enables the repo's *"Allow GitHub Actions to create and approve pull requests"* setting; the Action then uses the repo's built-in `GITHUB_TOKEN` (no GitHub token is stored as a secret — only `REMYX_API_KEY` and `ANTHROPIC_API_KEY`).
+The recommendation pipeline matches new arXiv papers to your interests daily. First run takes 40-120s to populate the pool; subsequent runs are instant.
 
-Requires `gh` authenticated (`gh auth login`, or `$GITHUB_TOKEN` with `repo` + `workflow` scopes) and admin on the target repo.
-
-#### Common options
-
-- `--repo owner/name` — target repo (or a GitHub URL); defaults to the current directory's git remote.
-- `--interest <uuid>` / `--auto-interest` — use an existing research interest, or create one from the repo.
-- `--mode auto|review` (`init` also has `off`) — how far to take setup.
-- `--dry-run` — print the plan (and, for `setup-local`, the rendered workflow) and exit without making changes.
-- `-y` / `--yes` — skip the confirmation prompt.
-
-Preview either path safely before committing to it:
+**Install Outrider on a repo**
 
 ```bash
-$ remyxai outrider setup-local --repo owner/name --auto-interest --dry-run
+remyxai outrider init --repo owner/name --auto-interest
 ```
 
-**A note on credentials:** with `setup-local`, your `REMYXAI_API_KEY` is stored as the repo's `REMYX_API_KEY` secret so the Action can fetch recommendations — anyone with write access to the repo's workflows can consume Remyx credits on that key, so use it on repos you control. With `outrider init`, the Remyx App provisions a scoped key for you. In both paths your Anthropic key is stored as a repo secret to run the agent.
+Drives the Remyx engine to install [Outrider](https://github.com/remyxai/outrider) on the target repo via the Remyx GitHub App: writes the workflow, sets the repo secrets, and opens a bot-authored setup PR. Your local git isn't touched. Requires `REMYXAI_API_KEY` and an Anthropic key for Claude Code (`--anthropic-key` or `ANTHROPIC_API_KEY`).
 
-### User
+If the Remyx GitHub App isn't installed on the target repo yet, the command surfaces the install link.
 
-Get user profile info:
-* cli command:
+## Command reference
+
+Run any command with `--help` for full flag listings and examples.
+
+| Command | What it does |
+|---|---|
+| `remyxai papers digest` | Recommendations grouped by Research Interest |
+| `remyxai papers list` | Recommendations flat view (filter by interest, period, source type) |
+| `remyxai papers refresh [--wait]` | Trigger a fresh Gemini re-ranking |
+| `remyxai papers refresh-status <task_id>` | Poll a refresh task |
+| `remyxai interests list` | List your Research Interests |
+| `remyxai interests get <name-or-uuid>` | Show one interest |
+| `remyxai interests create` | Create a new interest |
+| `remyxai interests update <id>` | Edit name / context / daily count / active state |
+| `remyxai interests toggle <id>` | Flip active/inactive |
+| `remyxai interests delete <id>` | Remove an interest |
+| `remyxai outrider init` | Install Outrider on a GitHub repo via the Remyx App |
+| `remyxai search list` | List recently added research assets (papers + Docker images) |
+| `remyxai search info <arxiv-id>` | Asset details |
+| `remyxai list-models` | List available trained models on your account |
+| `remyxai summarize-model <name>` | Show a model's summary |
+| `remyxai deploy-model <name> <up\|down>` | Bring a containerized deployment up or down |
+| `remyxai dataset <action> [name]` | Manage datasets (`list`, `download`, `delete`) |
+
+## Outrider install — what happens
+
+`remyxai outrider init` calls the Remyx engine, which uses the **Remyx GitHub App** (`remyx-ai[bot]`) to:
+
+- Write the Outrider workflow to the target repo
+- Set the workflow's required Actions secrets
+- Open a bot-authored setup PR (and merge it automatically in `--mode auto`)
+- Fire the first Outrider run
+
+Your local git is not touched. The only credential you provide is your `REMYXAI_API_KEY`, which authorizes the engine to act on your behalf through the App — it is not copied into the target repo's secrets. Anthropic and GitHub credentials needed at workflow runtime are configured by the App.
+
+## Development
+
 ```bash
-$ remyxai user profile
-```
-* python command:
-```python
-from remyxai.api import get_user_profile
+git clone https://github.com/remyxai/remyxai-cli
+cd remyxai-cli
+pip install -e .
 
-print(get_user_profile())
-```
-
-
-Get user credit/subscription info:
-* cli command:
-```bash
-$ remyxai user credits
-```
-* python command:
-```python
-from remyxai.api import get_user_credits
-
-print(get_user_credits())
+# Run tests
+pytest tests/
 ```
 
-### Utils
-Label images locally:
-* cli command:
-```bash
-$ remyxai utils label --labels="comma,separated,labels" --image_dir="/path/to/image/dir"
-```
+Releases: tag a `v*` release on GitHub and the `publish.yml` workflow builds + uploads to PyPI via Trusted Publishing (no API token stored).
 
-* python command:
-```python
-from remyxai.utils import labeler
-model_name = "<your-model-name>"
-labels = ["comma", "separated", "labels"]
-image_dir = "/path/to/image/dir"
-print(labeler(labels, image_dir, model_name))
-```
+## Links
 
+- [Outrider](https://github.com/remyxai/outrider) — the GitHub Action this CLI installs
+- [engine.remyx.ai](https://engine.remyx.ai) — web app, account settings, API key
+- [Issues](https://github.com/remyxai/remyxai-cli/issues) — bug reports and feature requests
