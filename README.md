@@ -71,10 +71,6 @@ Run any command with `--help` for full flag listings and examples.
 | `remyxai outrider init` | Install Outrider on a GitHub repo via the Remyx App |
 | `remyxai search list` | List recently added research assets (papers + Docker images) |
 | `remyxai search info <arxiv-id>` | Asset details |
-| `remyxai list-models` | List available trained models on your account |
-| `remyxai summarize-model <name>` | Show a model's summary |
-| `remyxai deploy-model <name> <up\|down>` | Bring a containerized deployment up or down |
-| `remyxai dataset <action> [name]` | Manage datasets (`list`, `download`, `delete`) |
 
 ## Outrider install — what happens
 

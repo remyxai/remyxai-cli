@@ -1,11 +1,7 @@
 """
-RemyxAI CLI - Main command interface
-All commands use "search" convention for asset discovery
+RemyxAI CLI — entry point and command-group registrations.
 """
 import click
-from remyxai.cli.deployment_actions import handle_deployment_action
-from remyxai.cli.evaluation_actions import handle_model_action
-from remyxai.cli.dataset_actions import handle_dataset_action
 from remyxai.cli.search_actions import (
     handle_search,
     handle_info,
@@ -29,54 +25,11 @@ from remyxai.cli.interest_actions import (
 from remyxai.cli.outrider_actions import handle_outrider_init
 from remyxai.cli.outrider_local import handle_outrider_setup_local
 
+
 @click.group()
 def cli():
-    """
-    RemyxAI CLI - ExperimentOps for AI Development
-    
-    """
+    """RemyxAI CLI — ExperimentOps for AI development."""
     pass
-
-
-@cli.command()
-def list_models():
-    """List all available models."""
-    try:
-        handle_model_action({"subaction": "list"})
-    except Exception as e:
-        raise click.ClickException(f"listing models failed: {e}")
-
-
-@cli.command()
-@click.argument("model_name")
-def summarize_model(model_name):
-    """Summarize a model."""
-    try:
-        handle_model_action({"subaction": "summarize", "model_name": model_name})
-    except Exception as e:
-        raise click.ClickException(f"summarizing model failed: {e}")
-
-
-@cli.command()
-@click.argument("model_name")
-@click.argument("action")
-def deploy_model(model_name, action):
-    """Deploy or tear down a model."""
-    try:
-        handle_deployment_action({"model_name": model_name, "action": action})
-    except Exception as e:
-        raise click.ClickException(f"deploying model failed: {e}")
-
-
-@cli.command()
-@click.argument("action")
-@click.argument("dataset_name", required=False)
-def dataset(action, dataset_name=None):
-    """Manage datasets."""
-    try:
-        handle_dataset_action({"action": action, "dataset_name": dataset_name})
-    except Exception as e:
-        raise click.ClickException(f"dataset action failed: {e}")
 
 
 @cli.group()

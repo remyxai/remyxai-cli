@@ -122,46 +122,6 @@ class TestApiKeySignatures:
         funcs = [search.search_assets, search.get_asset, search.list_assets, search.get_stats]
         self._assert_all_have_api_key(funcs)
 
-    def test_datasets_module(self):
-        from remyxai.api import datasets
-
-        funcs = [datasets.list_datasets, datasets.download_dataset, datasets.delete_dataset]
-        self._assert_all_have_api_key(funcs)
-
-    def test_models_module(self):
-        from remyxai.api import models
-
-        funcs = [models.list_models, models.get_model_summary, models.delete_model, models.download_model]
-        self._assert_all_have_api_key(funcs)
-
-    def test_tasks_module(self):
-        from remyxai.api import tasks
-
-        funcs = [
-            tasks.run_myxmatch, tasks.run_benchmark, tasks.get_job_status,
-            tasks.train_classifier, tasks.train_detector, tasks.train_generator,
-            tasks.run_datacomposer,
-        ]
-        self._assert_all_have_api_key(funcs)
-
-    def test_evaluations_module(self):
-        from remyxai.api import evaluations
-
-        funcs = [evaluations.list_evaluations, evaluations.download_evaluation, evaluations.delete_evaluation]
-        self._assert_all_have_api_key(funcs)
-
-    def test_deployment_module(self):
-        from remyxai.api import deployment
-
-        funcs = [deployment.download_deployment_package, deployment.deploy_model]
-        self._assert_all_have_api_key(funcs)
-
-    def test_user_module(self):
-        from remyxai.api import user
-
-        funcs = [user.get_user_profile, user.get_user_credits]
-        self._assert_all_have_api_key(funcs)
-
     @staticmethod
     def _assert_all_have_api_key(funcs):
         for fn in funcs:
@@ -202,38 +162,6 @@ class TestApiKeyThreading:
 
         call_kwargs = mock_post.call_args[1]
         assert "Bearer" in call_kwargs["headers"]["Authorization"]
-
-    @patch("remyxai.api.datasets.requests.get")
-    def test_list_datasets_uses_explicit_key(self, mock_get, mock_get_response):
-        from remyxai.api.datasets import list_datasets
-
-        mock_get.return_value = mock_get_response
-        list_datasets(api_key="dataset-key-123")
-
-        call_kwargs = mock_get.call_args[1]
-        assert call_kwargs["headers"]["Authorization"] == "Bearer dataset-key-123"
-
-    @patch("remyxai.api.models.requests.get")
-    def test_list_models_uses_explicit_key(self, mock_get, mock_get_response):
-        from remyxai.api.models import list_models
-
-        mock_get_response.json.return_value = ["model_1"]
-        mock_get.return_value = mock_get_response
-        list_models(api_key="models-key-456")
-
-        call_kwargs = mock_get.call_args[1]
-        assert call_kwargs["headers"]["Authorization"] == "Bearer models-key-456"
-
-    @patch("remyxai.api.user.requests.get")
-    def test_get_user_profile_uses_explicit_key(self, mock_get, mock_get_response):
-        from remyxai.api.user import get_user_profile
-
-        mock_get_response.json.return_value = {"name": "test"}
-        mock_get.return_value = mock_get_response
-        get_user_profile(api_key="user-key-789")
-
-        call_kwargs = mock_get.call_args[1]
-        assert call_kwargs["headers"]["Authorization"] == "Bearer user-key-789"
 
 # ---------------------------------------------------------------------------
 # Tests: SearchClient
@@ -349,22 +277,3 @@ class TestBackwardsCompatibility:
         assert results["total"] == 0
         mock_post.assert_called_once()
 
-    @patch("remyxai.api.models.requests.get")
-    def test_list_models_works_without_api_key_arg(self, mock_get, mock_get_response):
-        from remyxai.api.models import list_models
-
-        mock_get_response.json.return_value = ["m1", "m2"]
-        mock_get.return_value = mock_get_response
-
-        result = list_models()
-        assert result == ["m1", "m2"]
-
-    @patch("remyxai.api.tasks.requests.post")
-    def test_train_classifier_works_without_api_key_arg(self, mock_post):
-        from remyxai.api.tasks import train_classifier
-
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"task_id": "123"}
-
-        result = train_classifier("model", ["a", "b"], "3")
-        assert result["task_id"] == "123"

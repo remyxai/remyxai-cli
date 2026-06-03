@@ -1,66 +1,28 @@
 """Tests for top-level CLI command wiring.
 
-Click renames underscores to dashes in command names by default
-(`list_models` → `list-models`), so the runner invokes the kebab-case
-form here.
+The top-level `cli` group exposes only the current product surface
+(`papers`, `interests`, `outrider`, `search`). Per-group wiring is
+tested in the dedicated test_*.py files (test_interests_actions,
+test_outrider_actions, test_search_actions, etc.).
 """
-from unittest.mock import patch
-
 from click.testing import CliRunner
 
 from remyxai.cli.commands import cli
 
 
-@patch("remyxai.cli.commands.handle_model_action")
-def test_list_models(mock_handle_model_action):
+def test_cli_help_lists_current_command_groups():
     runner = CliRunner()
-    result = runner.invoke(cli, ["list-models"])
+    result = runner.invoke(cli, ["--help"])
 
-    mock_handle_model_action.assert_called_once_with({"subaction": "list"})
     assert result.exit_code == 0
+    for cmd in ("papers", "interests", "outrider", "search"):
+        assert cmd in result.output, f"expected '{cmd}' in top-level help"
 
 
-@patch("remyxai.cli.commands.handle_model_action")
-def test_summarize_model(mock_handle_model_action):
+def test_cli_help_omits_deprecated_commands():
     runner = CliRunner()
-    result = runner.invoke(cli, ["summarize-model", "model_name"])
+    result = runner.invoke(cli, ["--help"])
 
-    mock_handle_model_action.assert_called_once_with(
-        {"subaction": "summarize", "model_name": "model_name"}
-    )
     assert result.exit_code == 0
-
-
-@patch("remyxai.cli.commands.handle_deployment_action")
-def test_deploy_model_up(mock_handle_deployment_action):
-    runner = CliRunner()
-    result = runner.invoke(cli, ["deploy-model", "model_name", "up"])
-
-    mock_handle_deployment_action.assert_called_once_with(
-        {"model_name": "model_name", "action": "up"}
-    )
-    assert result.exit_code == 0
-
-
-@patch("remyxai.cli.commands.handle_deployment_action")
-def test_deploy_model_down(mock_handle_deployment_action):
-    runner = CliRunner()
-    result = runner.invoke(cli, ["deploy-model", "model_name", "down"])
-
-    mock_handle_deployment_action.assert_called_once_with(
-        {"model_name": "model_name", "action": "down"}
-    )
-    assert result.exit_code == 0
-
-
-def test_deploy_model_invalid_action():
-    """Invalid action must surface as an error with a non-zero exit code.
-
-    The command uses `click.ClickException`, which prefixes the message
-    with `Error: ` and exits 1. This is the contract this test enforces.
-    """
-    runner = CliRunner()
-    result = runner.invoke(cli, ["deploy-model", "model_name", "invalid_action"])
-
-    assert "deploying model failed" in result.output
-    assert result.exit_code != 0
+    for gone in ("list-models", "summarize-model", "deploy-model", "dataset"):
+        assert gone not in result.output, f"deprecated '{gone}' still listed"
