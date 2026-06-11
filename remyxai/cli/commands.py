@@ -610,17 +610,16 @@ def outrider_init(
     and no personal `gh` token is needed; only your REMYXAI_API_KEY.
 
     Requires: the Remyx GitHub App installed on the repo (the command
-    surfaces the install link if it isn't) and a connected model provider
-    (pass --anthropic-key or set ANTHROPIC_API_KEY the first time).
+    surfaces the install link if it isn't) and a connected model provider —
+    connect Claude Code once on engine.remyx.ai/integrations and the CLI
+    uses it automatically. (--anthropic-key / ANTHROPIC_API_KEY is only a
+    one-time fallback if you haven't connected one there yet.)
 
     Examples:
 
       remyxai outrider init --repo remyxai/RepoRanger --auto-interest
 
       remyxai outrider init --repo owner/name --interest <uuid> --mode review
-
-      REMYXAI_API_KEY=... ANTHROPIC_API_KEY=... \\
-        remyxai outrider init --repo owner/name --interest <uuid> --yes
     """
     handle_outrider_init(
         repo=repo,
