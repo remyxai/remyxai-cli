@@ -18,6 +18,8 @@ from remyxai.cli.interest_actions import (
     handle_interests_list,
     handle_interests_get,
     handle_interests_create,
+    handle_interests_create_from_repo,
+    handle_interests_create_from_project,
     handle_interests_update,
     handle_interests_delete,
     handle_interests_toggle,
@@ -323,13 +325,20 @@ def interests_get(interest, output_format):
               help="Recommendations per day (1-10).")
 @click.option("--inactive", is_flag=True, default=False,
               help="Create as inactive (excluded from daily digest until toggled).")
+@click.option("--refresh/--no-refresh", default=True, show_default=True,
+              help="Kick off a recommendations refresh after creation.")
+@click.option("--wait", "-w", is_flag=True, default=False,
+              help="Block until the recommendations refresh completes.")
 @click.option("--format", "-f", "output_format", default="text",
               type=click.Choice(["text", "json"]), show_default=True)
-def interests_create(name, context, daily_count, inactive, output_format):
+def interests_create(name, context, daily_count, inactive, refresh, wait,
+                     output_format):
     """
     Create a new Research Interest profile.
 
-    Prompts interactively if --name or --context are not supplied.
+    Prompts interactively if --name or --context are not supplied. By
+    default it also kicks off a recommendations refresh so the interest is
+    populated; pass --no-refresh to skip, or --wait to block until ready.
 
     Examples:
 
@@ -338,13 +347,119 @@ def interests_create(name, context, daily_count, inactive, output_format):
       remyxai interests create \\
         --name "LLM Efficiency" \\
         --context "Quantization, speculative decoding, KV cache compression" \\
-        --daily-count 3
+        --daily-count 3 --wait
     """
     handle_interests_create(
         name=name,
         context=context,
         daily_count=daily_count,
         inactive=inactive,
+        refresh=refresh,
+        wait=wait,
+        output_format=output_format,
+    )
+
+
+@interests.command("from-repo")
+@click.argument("repo_url")
+@click.option("--name", "-n", default=None,
+              help="Interest name (defaults to the repo name).")
+@click.option("--daily-count", "-d", default=2, show_default=True,
+              help="Recommendations per day (1-10).")
+@click.option("--inactive", is_flag=True, default=False,
+              help="Create as inactive (excluded from daily digest until toggled).")
+@click.option("--automate", default="none", show_default=True,
+              type=click.Choice(["none", "review", "auto"]),
+              help="Automate paper PRs on this repo: 'none' (Not now), "
+                   "'review' (open a setup PR to review), or "
+                   "'auto' (set it up + merge + first run).")
+@click.option("--timeout", default=300, show_default=True,
+              help="Seconds to wait for repo analysis before giving up.")
+@click.option("--refresh/--no-refresh", default=True, show_default=True,
+              help="Kick off a recommendations refresh after creation.")
+@click.option("--wait", "-w", is_flag=True, default=False,
+              help="Block until the recommendations refresh completes.")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def interests_from_repo(repo_url, name, daily_count, inactive, automate,
+                        timeout, refresh, wait, output_format):
+    """
+    Create a Research Interest from a GitHub repo.
+
+    Analyzes REPO_URL to generate a profile, then creates the interest
+    linked to the repo — which dispatches experiment-history extraction.
+    Paper-PR automation defaults to "Not now"; opt in with --automate.
+    A recommendations refresh is kicked off by default (--no-refresh to
+    skip, --wait to block until ready).
+
+    Examples:
+
+      remyxai interests from-repo https://github.com/remyxai/outrider
+
+      remyxai interests from-repo https://github.com/remyxai/outrider \\
+        --name "Outrider" --daily-count 3 --automate review --wait
+    """
+    handle_interests_create_from_repo(
+        repo_url=repo_url,
+        name=name,
+        daily_count=daily_count,
+        inactive=inactive,
+        automate=automate,
+        timeout=timeout,
+        refresh=refresh,
+        wait=wait,
+        output_format=output_format,
+    )
+
+
+@interests.command("from-project")
+@click.argument("project")
+@click.option("--name", "-n", default=None,
+              help="Interest name (defaults to a project-derived name).")
+@click.option("--daily-count", "-d", default=2, show_default=True,
+              help="Recommendations per day (1-10).")
+@click.option("--inactive", is_flag=True, default=False,
+              help="Create as inactive (excluded from daily digest until toggled).")
+@click.option("--include-experiment", "-e", multiple=True,
+              help="Experiment name or UUID to track (repeatable). "
+                   "Omit to track all experiments on the project.")
+@click.option("--no-auto-update", is_flag=True, default=False,
+              help="Do not auto-refresh context as new experiments land.")
+@click.option("--refresh/--no-refresh", default=True, show_default=True,
+              help="Kick off a recommendations refresh after creation.")
+@click.option("--wait", "-w", is_flag=True, default=False,
+              help="Block until context build + recommendations refresh complete "
+                   "(recommended for project interests).")
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), show_default=True)
+def interests_from_project(project, name, daily_count, inactive,
+                           include_experiment, no_auto_update, refresh, wait,
+                           output_format):
+    """
+    Create a Research Interest from a project.
+
+    PROJECT is a project name or UUID. The server builds the interest
+    context from the project's experiments. By default it tracks every
+    experiment and keeps the context fresh as new ones are added. A
+    recommendations refresh is kicked off by default — use --wait so it
+    runs after the async context build finishes.
+
+    Examples:
+
+      remyxai interests from-project "Spatial VQA" --wait
+
+      remyxai interests from-project 1a2b3c4d-... \\
+        -e "baseline-run" -e "dpo-v2" --no-auto-update
+    """
+    handle_interests_create_from_project(
+        project=project,
+        name=name,
+        daily_count=daily_count,
+        inactive=inactive,
+        include_experiment=include_experiment,
+        no_auto_update=no_auto_update,
+        refresh=refresh,
+        wait=wait,
         output_format=output_format,
     )
 
