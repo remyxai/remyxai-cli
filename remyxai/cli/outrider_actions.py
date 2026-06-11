@@ -29,10 +29,14 @@ from typing import Optional
 import click
 
 from remyxai.api.interests import (
-    create_interest,
     get_interest,
     provision_action,
     poll_provision_action,
+)
+from remyxai.cli.interest_actions import (
+    RepoAnalysisError,
+    create_interest_from_repo,
+    _kick_off_recommendations,
 )
 from remyxai.api.integrations import connect_credential, get_integration_status
 from remyxai.api.github_app import get_app_install_url, is_app_installed
@@ -107,13 +111,26 @@ def _resolve_interest_id(interest_id, auto_interest, repo, repo_url, api_key):
         click.echo(
             "Creating a Research Interest from this repo (may take 30-90s)…"
         )
+        # Use the analyze-repo flow so the interest gets a rich,
+        # ExperimentHistory-derived context (and the server dispatches
+        # extraction) instead of a URL-only stub. Paper-PR
+        # provisioning is handled separately below by `outrider init`,
+        # so we don't provision here (automate="none").
         try:
-            created = create_interest(
+            created = create_interest_from_repo(
+                repo_url,
                 name=repo.split("/")[-1],
-                context=repo_url,
                 daily_count=3,
                 is_active=True,
+                automate="none",
                 api_key=api_key,
+                echo=click.echo,
+            )
+        except RepoAnalysisError as e:
+            raise click.ClickException(
+                f"interest creation failed during repo analysis: {e}\n"
+                f"  Try again, or create one at engine.remyx.ai and re-run "
+                f"with --interest <uuid>."
             )
         except Exception as e:
             raise click.ClickException(
@@ -127,6 +144,11 @@ def _resolve_interest_id(interest_id, auto_interest, repo, repo_url, api_key):
                 f"interest creation did not return a UUID: {created}"
             )
         click.echo(f"✓ Created interest: {new_id}")
+        if created.get("history_extraction_task_id"):
+            click.echo(
+                "  🧪 experiment-history extraction dispatched; "
+                "interest context will keep deepening as it completes."
+            )
         return new_id
 
     typed = click.prompt("Remyx interest UUID (from engine.remyx.ai)").strip()
@@ -308,6 +330,19 @@ def handle_outrider_init(
     # 6. Preflight: App install + model provider (only needed to provision)
     _ensure_app_installed(resolved_repo, api_key, no_wait)
     _ensure_model_provider(anthropic_key, api_key)
+
+    # 6b. Pre-warm recommendations so the first run has picks to open a PR
+    # from. A brand-new interest ranks asynchronously; firing the Outrider
+    # first run before the pool populates makes it report "no recommendations"
+    # (the cold-start race). Trigger a refresh now and — unless --no-wait —
+    # block until the pool is populated before provisioning dispatches the run.
+    click.echo("\nWarming up recommendations for the interest…")
+    _kick_off_recommendations(
+        resolved_interest,
+        wait=(not no_wait),
+        api_key=api_key,
+        echo=click.echo,
+    )
 
     # 7. Provision (server-side, bot-authored)
     auto_merge = (mode == "auto")

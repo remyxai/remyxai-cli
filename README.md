@@ -36,11 +36,12 @@ remyxai interests create \
   --name "LLM Efficiency" \
   --context "Quantization, speculative decoding, KV cache compression"
 
-# Or seed from a GitHub repo (auto-extracts context)
-remyxai interests create --context "https://github.com/your-org/your-repo"
+# From a GitHub repo, or from one of your projects
+remyxai interests from-repo https://github.com/your-org/your-repo
+remyxai interests from-project "Spatial VQA"
 ```
 
-The recommendation pipeline matches new arXiv papers to your interests daily. First run takes 40-120s to populate the pool; subsequent runs are instant.
+The pipeline matches new arXiv papers to your interests daily. See [Research Interests](#research-interests) for all three ways to create one.
 
 **Install Outrider on a repo**
 
@@ -48,7 +49,84 @@ The recommendation pipeline matches new arXiv papers to your interests daily. Fi
 remyxai outrider init --repo owner/name --auto-interest
 ```
 
-Drives the Remyx engine to install [Outrider](https://github.com/remyxai/outrider) on the target repo via the Remyx GitHub App: writes the workflow, sets the repo secrets, and opens a bot-authored setup PR. Your local git isn't touched. Requires `REMYXAI_API_KEY` and an Anthropic key for Claude Code (`--anthropic-key` or `ANTHROPIC_API_KEY`).
+Sets up [Outrider](https://github.com/remyxai/outrider) on the target repo, server-side — your local git is never touched. See [Outrider](#outrider) for what it configures and the credentials it needs.
+
+## Research Interests
+
+A Research Interest is a named description of what to track; the recommendation pipeline matches new arXiv papers (and other sources) to it. Every create command kicks off a first recommendation pass automatically so the interest is populated right away — add `--wait` to block until the picks are ready, or `--no-refresh` to skip.
+
+### From free-form context
+
+```bash
+remyxai interests create \
+  --name "LLM Efficiency" \
+  --context "Quantization, speculative decoding, KV cache compression"
+```
+
+`--context` also accepts a HuggingFace or GitHub URL, which the server expands into context.
+
+### From a GitHub repo
+
+`remyxai interests from-repo <github-url>` analyzes the repo, generates a profile of the project (themes, architecture, history), and uses it as the interest's context:
+
+```bash
+remyxai interests from-repo https://github.com/your-org/your-repo \
+  --name "My Project" --daily-count 3 --automate review --wait
+```
+
+- `--automate {none|review|auto}` — paper-PR automation on the repo: `none` (default; just create the interest), `review` (open a setup PR to review), or `auto` (set it up automatically). For the full repo setup, see [Outrider](#outrider).
+
+### From a project
+
+`remyxai interests from-project <name-or-uuid>` builds the interest's context from a project's experiments:
+
+```bash
+# Track all experiments on the project
+remyxai interests from-project "Spatial VQA" --wait
+
+# Or curate a subset, and pin the context
+remyxai interests from-project <uuid> -e "baseline-run" -e "dpo-v2" --no-auto-update
+```
+
+- `-e/--include-experiment` — track a specific experiment (repeatable); omit to track all.
+- `--no-auto-update` — pin the context instead of refreshing as new experiments land.
+
+## Outrider
+
+[Outrider](https://github.com/remyxai/outrider) is a GitHub Action that opens pull requests integrating relevant new papers into a repo. `remyxai outrider init` sets it up for you, server-side — your local git is never touched.
+
+```bash
+remyxai outrider init --repo owner/name --auto-interest
+```
+
+This uses the **Remyx GitHub App** (`remyx-ai[bot]`) to:
+
+- Create a Research Interest from the repo (`--auto-interest`), or use an existing one (`--interest <uuid>`)
+- Write the Outrider workflow to the target repo and set its required Actions secrets
+- Open a bot-authored setup PR — and, in `auto` mode, merge it and fire the first run
+
+### Modes
+
+Set with `--mode` (default `auto`):
+
+- `auto` — provision, merge the setup PR, and start the first run
+- `review` — provision and open the setup PR for you to review and merge
+
+### Credentials
+
+**You set up two things, once:**
+
+1. Your `REMYXAI_API_KEY`, exported in your shell (see [Authenticate](#authenticate)) — this authorizes the CLI.
+2. A model provider connected on the [Integrations page](https://engine.remyx.ai/integrations) — Claude Code today, more providers coming soon. The Action needs this to call the model.
+
+**Remyx handles the rest.** You never create repo secrets by hand. During provisioning the Remyx GitHub App sets two Actions secrets on the target repo for you:
+
+| Repo secret | What it is |
+|---|---|
+| `REMYX_API_KEY` | A scoped automation key Remyx mints just for this repo — *not* your personal `REMYXAI_API_KEY`, and revocable on its own. |
+| `ANTHROPIC_API_KEY` (or your provider's key) | Copied from the provider you connected on the Integrations page, so the Action can call the model at runtime. |
+
+> **No provider connected yet?** As a one-time fallback, pass `--anthropic-key` (or set `ANTHROPIC_API_KEY`) and the CLI connects it for you. Otherwise no model key ever goes on the command line.
 
 If the Remyx GitHub App isn't installed on the target repo yet, the command surfaces the install link.
 
@@ -64,24 +142,15 @@ Run any command with `--help` for full flag listings and examples.
 | `remyxai papers refresh-status <task_id>` | Poll a refresh task |
 | `remyxai interests list` | List your Research Interests |
 | `remyxai interests get <name-or-uuid>` | Show one interest |
-| `remyxai interests create` | Create a new interest |
+| `remyxai interests create` | Create an interest from free-form context |
+| `remyxai interests from-repo <github-url>` | Create an interest from a GitHub repo profile |
+| `remyxai interests from-project <name-or-uuid>` | Create an interest from a project's experiments |
 | `remyxai interests update <id>` | Edit name / context / daily count / active state |
 | `remyxai interests toggle <id>` | Flip active/inactive |
 | `remyxai interests delete <id>` | Remove an interest |
 | `remyxai outrider init` | Install Outrider on a GitHub repo via the Remyx App |
 | `remyxai search list` | List recently added research assets (papers + Docker images) |
 | `remyxai search info <arxiv-id>` | Asset details |
-
-## Outrider install — what happens
-
-`remyxai outrider init` calls the Remyx engine, which uses the **Remyx GitHub App** (`remyx-ai[bot]`) to:
-
-- Write the Outrider workflow to the target repo
-- Set the workflow's required Actions secrets
-- Open a bot-authored setup PR (and merge it automatically in `--mode auto`)
-- Fire the first Outrider run
-
-Your local git is not touched. The only credential you provide is your `REMYXAI_API_KEY`, which authorizes the engine to act on your behalf through the App — it is not copied into the target repo's secrets. Anthropic and GitHub credentials needed at workflow runtime are configured by the App.
 
 ## Development
 
@@ -101,3 +170,4 @@ Releases: tag a `v*` release on GitHub and the `publish.yml` workflow builds + u
 - [Outrider](https://github.com/remyxai/outrider) — the GitHub Action this CLI installs
 - [engine.remyx.ai](https://engine.remyx.ai) — web app, account settings, API key
 - [Issues](https://github.com/remyxai/remyxai-cli/issues) — bug reports and feature requests
+```

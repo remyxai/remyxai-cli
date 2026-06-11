@@ -84,16 +84,38 @@ def test_resolve_interest_valid_uuid_probes_engine():
     gi.assert_called_once()
 
 
-def test_resolve_interest_auto_creates():
+def test_resolve_interest_auto_creates_via_repo_analysis():
+    """--auto-interest must run the analyze-repo flow (rich
+    ExperimentHistory context) rather than stuffing the URL into context."""
     uid = "6a730cc4-010c-49ce-9c7f-6d9c59431739"
-    with patch.object(outrider_actions, "create_interest", return_value={"id": uid}) as ci:
+    with patch.object(
+        outrider_actions, "create_interest_from_repo",
+        return_value={"id": uid, "history_extraction_task_id": "t-1"},
+    ) as ci:
         out = outrider_actions._resolve_interest_id(
             interest_id=None, auto_interest=True,
             repo="remyxai/outrider", repo_url="https://github.com/remyxai/outrider",
             api_key="k",
         )
     assert out == uid
-    assert ci.call_args.kwargs["context"] == "https://github.com/remyxai/outrider"
+    # Goes through the repo-analysis flow with the repo URL + the user's key,
+    # and does NOT provision paper PRs here (outrider init does that later).
+    assert ci.call_args.args[0] == "https://github.com/remyxai/outrider"
+    assert ci.call_args.kwargs["api_key"] == "k"
+    assert ci.call_args.kwargs["automate"] == "none"
+
+
+def test_resolve_interest_auto_create_surfaces_analysis_failure():
+    """A silent URL-stub; analysis failure must raise."""
+    with patch.object(
+        outrider_actions, "create_interest_from_repo",
+        side_effect=outrider_actions.RepoAnalysisError("rate limited"),
+    ):
+        with pytest.raises(click.ClickException):
+            outrider_actions._resolve_interest_id(
+                interest_id=None, auto_interest=True,
+                repo="o/r", repo_url="https://github.com/o/r", api_key="k",
+            )
 
 
 # ─── App-install preflight ──────────────────────────────────────────────────
@@ -228,7 +250,7 @@ def test_dry_run_makes_no_api_calls(monkeypatch):
     monkeypatch.setenv("REMYXAI_API_KEY", "k")
     with patch.object(outrider_actions, "is_app_installed") as inst, \
          patch.object(outrider_actions, "get_integration_status") as gs, \
-         patch.object(outrider_actions, "create_interest") as ci, \
+         patch.object(outrider_actions, "create_interest_from_repo") as ci, \
          patch.object(outrider_actions, "get_interest") as gi, \
          patch.object(outrider_actions, "provision_action") as prov:
         outrider_actions.handle_outrider_init(
@@ -267,10 +289,14 @@ def test_full_auto_flow_provisions_and_reports(monkeypatch):
         "result": {"pr_url": "https://github.com/o/r/pull/7", "merged": True,
                    "secret_set": True, "dispatched": True, "model_key_missing": False},
     }
+    calls = []
     with patch.object(outrider_actions, "get_interest", return_value={"id": uid}), \
          patch.object(outrider_actions, "is_app_installed", return_value=True), \
          patch.object(outrider_actions, "get_integration_status", return_value={"connected": True}), \
-         patch.object(outrider_actions, "provision_action", return_value={"task_id": "t1"}) as prov, \
+         patch.object(outrider_actions, "_kick_off_recommendations",
+                      side_effect=lambda *a, **k: calls.append("warm")) as warm, \
+         patch.object(outrider_actions, "provision_action",
+                      side_effect=lambda *a, **k: calls.append("provision") or {"task_id": "t1"}) as prov, \
          patch.object(outrider_actions, "poll_provision_action", return_value=completed):
         outrider_actions.handle_outrider_init(
             repo="owner/repo", interest_id=uid, auto_interest=False,
@@ -278,3 +304,25 @@ def test_full_auto_flow_provisions_and_reports(monkeypatch):
             dry_run=False, no_wait=False,
         )
     assert prov.call_args.kwargs["auto_merge"] is True
+    # Recommendations are warmed up before the first run is provisioned.
+    warm.assert_called_once()
+    assert warm.call_args.kwargs.get("wait") is True
+    assert calls == ["warm", "provision"]
+
+
+def test_no_wait_warms_without_blocking(monkeypatch):
+    """--no-wait still triggers the warm-up refresh, but doesn't block on it."""
+    monkeypatch.setenv("REMYXAI_API_KEY", "k")
+    uid = "6a730cc4-010c-49ce-9c7f-6d9c59431739"
+    with patch.object(outrider_actions, "get_interest", return_value={"id": uid}), \
+         patch.object(outrider_actions, "is_app_installed", return_value=True), \
+         patch.object(outrider_actions, "get_integration_status", return_value={"connected": True}), \
+         patch.object(outrider_actions, "_kick_off_recommendations") as warm, \
+         patch.object(outrider_actions, "provision_action", return_value={"task_id": "t1"}):
+        outrider_actions.handle_outrider_init(
+            repo="owner/repo", interest_id=uid, auto_interest=False,
+            mode="auto", anthropic_key=None, skip_confirm=True,
+            dry_run=False, no_wait=True,
+        )
+    warm.assert_called_once()
+    assert warm.call_args.kwargs.get("wait") is False
