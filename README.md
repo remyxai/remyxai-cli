@@ -134,6 +134,8 @@ Once Outrider is installed, `remyxai outrider trigger` dispatches an ad-hoc run 
 
 If the Remyx GitHub App isn't installed on the target repo yet, the command surfaces the install link.
 
+For the no-App `setup-local` path, the `--no-cron` switch, and `--bulk-repos` onboarding across many repos at once, see [docs/install-paths.md](docs/install-paths.md).
+
 ## Command reference
 
 Run any command with `--help` for full flag listings and examples.

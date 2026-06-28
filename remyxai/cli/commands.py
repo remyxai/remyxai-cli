@@ -25,6 +25,8 @@ from remyxai.cli.interest_actions import (
     handle_interests_toggle,
 )
 from remyxai.cli.outrider_actions import (
+    _parse_bulk_repos_tsv,
+    _run_bulk,
     handle_outrider_init,
     handle_outrider_trigger,
 )
@@ -595,13 +597,22 @@ def outrider():
                   "Don't block polling for the App install or provisioning to "
                   "finish; print next steps and return."
               ))
+@click.option("--bulk-repos", "bulk_repos", type=click.Path(), default=None,
+              help=(
+                  "Path to a TSV mapping repos to ResearchInterest UUIDs "
+                  "(\"owner/name<TAB>uuid\"). Loops `init` over each row "
+                  "sequentially. Mutually exclusive with --repo / --interest "
+                  "/ --auto-interest."
+              ))
+@click.option("--pace", "pace_s", type=int, default=3, show_default=True,
+              help="Seconds to wait between repos in --bulk-repos mode.")
 @click.option("--dry-run", is_flag=True, default=False,
               help="Print the plan and exit without making any changes.")
 @click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
               help="Skip the confirmation prompt (default is opt-in).")
 def outrider_init(
     repo, interest_id, auto_interest, mode, anthropic_key,
-    no_wait, dry_run, skip_confirm,
+    no_wait, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider on a GitHub repo.
@@ -623,7 +634,30 @@ def outrider_init(
       remyxai outrider init --repo remyxai/RepoRanger --auto-interest
 
       remyxai outrider init --repo owner/name --interest <uuid> --mode review
+
+      remyxai outrider init --bulk-repos repos.tsv --mode review --yes
     """
+    if bulk_repos:
+        if repo or interest_id or auto_interest:
+            raise click.UsageError(
+                "--bulk-repos is mutually exclusive with "
+                "--repo / --interest / --auto-interest."
+            )
+        rows = _parse_bulk_repos_tsv(bulk_repos)
+        _run_bulk(
+            handle_outrider_init,
+            rows,
+            common_kwargs=dict(
+                auto_interest=False,
+                mode=mode,
+                anthropic_key=anthropic_key,
+                skip_confirm=skip_confirm,
+                dry_run=dry_run,
+                no_wait=no_wait,
+            ),
+            pace_s=pace_s,
+        )
+        return
     handle_outrider_init(
         repo=repo,
         interest_id=interest_id,
@@ -652,13 +686,29 @@ def outrider_init(
 @click.option("--anthropic-key", "anthropic_key", default=None,
               help="Anthropic API key to set as the ANTHROPIC_API_KEY repo "
                    "secret. Falls back to $ANTHROPIC_API_KEY, then prompts.")
+@click.option("--no-cron", "no_cron", is_flag=True, default=False,
+              help=(
+                  "Render the workflow with the scheduled cron commented "
+                  "out. Manual `workflow_dispatch` / `remyxai outrider "
+                  "trigger` only. Re-enable later by uncommenting the "
+                  "schedule block."
+              ))
+@click.option("--bulk-repos", "bulk_repos", type=click.Path(), default=None,
+              help=(
+                  "Path to a TSV mapping repos to ResearchInterest UUIDs "
+                  "(\"owner/name<TAB>uuid\"). Loops `setup-local` over each "
+                  "row sequentially. Mutually exclusive with --repo / "
+                  "--interest / --auto-interest."
+              ))
+@click.option("--pace", "pace_s", type=int, default=3, show_default=True,
+              help="Seconds to wait between repos in --bulk-repos mode.")
 @click.option("--dry-run", is_flag=True, default=False,
               help="Print the plan + rendered workflow and exit; no changes.")
 @click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
               help="Skip the confirmation prompt (default is opt-in).")
 def outrider_setup_local(
     repo, interest_id, auto_interest, mode, anthropic_key,
-    dry_run, skip_confirm,
+    no_cron, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider WITHOUT the Remyx GitHub App.
@@ -681,7 +731,31 @@ def outrider_setup_local(
 
       remyxai outrider setup-local --repo owner/name --interest <uuid> \\
         --mode review
+
+      remyxai outrider setup-local --bulk-repos repos.tsv --mode review --yes \\
+        --no-cron
     """
+    if bulk_repos:
+        if repo or interest_id or auto_interest:
+            raise click.UsageError(
+                "--bulk-repos is mutually exclusive with "
+                "--repo / --interest / --auto-interest."
+            )
+        rows = _parse_bulk_repos_tsv(bulk_repos)
+        _run_bulk(
+            handle_outrider_setup_local,
+            rows,
+            common_kwargs=dict(
+                auto_interest=False,
+                mode=mode,
+                anthropic_key=anthropic_key,
+                skip_confirm=skip_confirm,
+                dry_run=dry_run,
+                no_cron=no_cron,
+            ),
+            pace_s=pace_s,
+        )
+        return
     handle_outrider_setup_local(
         repo=repo,
         interest_id=interest_id,
@@ -690,6 +764,7 @@ def outrider_setup_local(
         anthropic_key=anthropic_key,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
+        no_cron=no_cron,
     )
 
 
