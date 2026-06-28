@@ -389,3 +389,155 @@ def handle_outrider_init(
             "  ⚠ No model provider key set — connect Claude Code so the first "
             "run can complete.", fg="yellow",
         )
+
+
+# ─── outrider trigger ─────────────────────────────────────────────────────
+
+WORKFLOW_FILENAME = "outrider.yml"
+
+
+def _gh_default_branch(repo: str) -> Optional[str]:
+    """Return the repo's default branch via `gh api`, or None on failure."""
+    try:
+        out = subprocess.check_output(
+            ["gh", "api", f"/repos/{repo}", "--jq", ".default_branch"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return out or None
+
+
+def _outrider_workflow_exists(repo: str) -> bool:
+    """Return True iff the repo has an Outrider workflow registered.
+
+    Probes the Actions API rather than the Contents API: the Contents
+    endpoint reports the file as soon as it's committed, but the Actions
+    endpoint only knows about a workflow after GitHub has indexed it for
+    dispatch — which is the precise capability we need for the trigger
+    call to succeed.
+    """
+    r = subprocess.run(
+        ["gh", "api", f"/repos/{repo}/actions/workflows/{WORKFLOW_FILENAME}",
+         "--silent"],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0
+
+
+def _gh_dispatch_outrider(repo, branch, inputs):
+    """Dispatch the Outrider workflow with the supplied inputs.
+
+    Uses ``gh workflow run`` (not raw ``gh api``) because workflow_dispatch
+    expects inputs nested under ``inputs.*`` in the request body. The raw
+    POST endpoint accepts ``ref`` and ``inputs`` at the top level and
+    rejects any extra top-level keys with ``HTTP 422 "X is not a permitted
+    key"``; ``gh workflow run`` handles that wrapping for us.
+
+    Returns (ok, stderr) so the caller can map errors to user-facing hints.
+    """
+    args = [
+        "gh", "workflow", "run", WORKFLOW_FILENAME,
+        "--repo", repo, "--ref", branch,
+    ]
+    for k, v in inputs.items():
+        if v is None or v == "":
+            continue
+        args.extend(["-f", f"{k}={v}"])
+    r = subprocess.run(args, capture_output=True, text=True)
+    return (r.returncode == 0, (r.stderr or "").strip())
+
+
+def _gh_latest_run_url(repo, sleep=time.sleep):
+    """Best-effort lookup of the most recent outrider.yml run URL."""
+    for _ in range(5):
+        try:
+            url = subprocess.check_output(
+                ["gh", "run", "list", "--repo", repo,
+                 "--workflow", WORKFLOW_FILENAME, "--limit", "1",
+                 "--json", "url", "--jq", ".[0].url"],
+                text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+            if url:
+                return url
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
+        sleep(2)
+    return None
+
+
+def handle_outrider_trigger(
+    repo, pin_method, pin_arxiv, interest_id, ref,
+):
+    """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
+
+    Called from `commands.outrider_trigger`. Mirrors `outrider setup-local`
+    by using the user's authenticated `gh` to POST the dispatch — no Remyx
+    engine round-trip, no Remyx App requirement. The repo must already
+    have an Outrider workflow installed (set up via `remyxai outrider init`
+    or `setup-local`).
+    """
+    # Inputs validation
+    if pin_method and pin_arxiv:
+        raise click.UsageError(
+            "--pin-method and --pin-arxiv are mutually exclusive."
+        )
+
+    # Repo resolution
+    resolved_repo = _normalize_repo(repo) if repo else _detect_github_repo_from_cwd()
+    if not resolved_repo:
+        raise click.UsageError(
+            "Could not determine target repo. Pass --repo owner/name or run "
+            "from inside a GitHub-origin git checkout."
+        )
+
+    # Pre-flight: refuse to dispatch on repos that aren't initialized.
+    # Surfaces a clear install hint instead of a generic 404 from the
+    # workflow_dispatch call below — the error is structurally about the
+    # repo's setup state, not the dispatch attempt itself.
+    if not _outrider_workflow_exists(resolved_repo):
+        raise click.ClickException(
+            f"Outrider is not installed on {resolved_repo}. Install it "
+            f"first:\n"
+            f"  remyxai outrider init --repo {resolved_repo}\n"
+            f"or, if your org can't grant the Remyx GitHub App yet:\n"
+            f"  remyxai outrider setup-local --repo {resolved_repo}"
+        )
+
+    # Ref defaults to the repo's default branch (so trigger works without
+    # the user knowing whether the repo's default is main, master, develop).
+    branch = ref or _gh_default_branch(resolved_repo)
+    if not branch:
+        raise click.ClickException(
+            f"Could not resolve a ref for {resolved_repo}. Pass --ref "
+            f"explicitly (e.g. --ref main)."
+        )
+
+    inputs = {
+        "pin-method": pin_method or "",
+        "pin-arxiv": pin_arxiv or "",
+        "interest-id": interest_id or "",
+    }
+
+    click.echo(f"Dispatching Outrider on {resolved_repo} (ref={branch})…")
+    if pin_method:
+        click.echo(f"  pin-method: {pin_method!r}")
+    if pin_arxiv:
+        click.echo(f"  pin-arxiv:  {pin_arxiv!r}")
+    if interest_id:
+        click.echo(f"  interest:   {interest_id}")
+
+    ok, stderr = _gh_dispatch_outrider(resolved_repo, branch, inputs)
+    if not ok:
+        hint = ""
+        if "403" in stderr or "permission" in stderr.lower():
+            hint = ("\n  Your gh token lacks the scope to dispatch workflows "
+                    "on this repo. Re-auth: `gh auth login --scopes workflow`.")
+        raise click.ClickException(f"workflow dispatch failed: {stderr}{hint}")
+
+    click.secho("✓ Dispatched.", fg="green", bold=True)
+    url = _gh_latest_run_url(resolved_repo)
+    if url:
+        click.echo(f"  Run: {url}")
+    else:
+        click.echo(f"  Run: https://github.com/{resolved_repo}/actions")

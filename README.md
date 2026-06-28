@@ -112,6 +112,10 @@ Set with `--mode` (default `auto`):
 - `auto` — provision, merge the setup PR, and start the first run
 - `review` — provision and open the setup PR for you to review and merge
 
+### Trigger a one-shot run
+
+Once Outrider is installed, `remyxai outrider trigger` dispatches an ad-hoc run targeting a specific paper or method — see [docs/method-targeted-runs.md](docs/method-targeted-runs.md) for the discover → trigger workflow.
+
 ### Credentials
 
 **You set up two things, once:**
@@ -149,6 +153,9 @@ Run any command with `--help` for full flag listings and examples.
 | `remyxai interests toggle <id>` | Flip active/inactive |
 | `remyxai interests delete <id>` | Remove an interest |
 | `remyxai outrider init` | Install Outrider on a GitHub repo via the Remyx App |
+| `remyxai outrider setup-local` | Install Outrider via your own `gh` (no Remyx App) |
+| `remyxai outrider trigger` | Dispatch a one-shot Outrider run; supports `--pin-method` / `--pin-arxiv` |
+| `remyxai search query <text>` | Search the engine's research-asset catalog |
 | `remyxai search list` | List recently added research assets (papers + Docker images) |
 | `remyxai search info <arxiv-id>` | Asset details |
 
