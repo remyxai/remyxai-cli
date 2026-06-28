@@ -25,7 +25,7 @@ from remyxai.cli.commands import cli
 
 
 def test_gh_dispatch_includes_pin_method_input():
-    """Non-empty inputs flow through to the gh-api -f args."""
+    """Non-empty inputs flow through to `gh workflow run -f <key>=<val>`."""
     captured = {}
 
     def fake_run(args, **kwargs):
@@ -40,7 +40,12 @@ def test_gh_dispatch_includes_pin_method_input():
         )
     assert ok is True
     args = captured["args"]
-    assert "ref=main" in args
+    # gh workflow run nests inputs under `inputs.*` server-side, so the
+    # raw POST never trips the "X is not a permitted key" rejection.
+    assert args[:3] == ["gh", "workflow", "run"]
+    assert "outrider.yml" in args
+    assert "--repo" in args and "owner/name" in args
+    assert "--ref" in args and "main" in args
     assert "pin-method=knowledge distillation" in args
     # Empty inputs are dropped, not sent as empty strings.
     assert not any(a.startswith("pin-arxiv=") for a in args)

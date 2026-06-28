@@ -426,11 +426,19 @@ def _outrider_workflow_exists(repo: str) -> bool:
 
 
 def _gh_dispatch_outrider(repo, branch, inputs):
-    """POST workflow_dispatch with the supplied inputs. Returns (ok, stderr)."""
+    """Dispatch the Outrider workflow with the supplied inputs.
+
+    Uses ``gh workflow run`` (not raw ``gh api``) because workflow_dispatch
+    expects inputs nested under ``inputs.*`` in the request body. The raw
+    POST endpoint accepts ``ref`` and ``inputs`` at the top level and
+    rejects any extra top-level keys with ``HTTP 422 "X is not a permitted
+    key"``; ``gh workflow run`` handles that wrapping for us.
+
+    Returns (ok, stderr) so the caller can map errors to user-facing hints.
+    """
     args = [
-        "gh", "api", "-X", "POST",
-        f"/repos/{repo}/actions/workflows/{WORKFLOW_FILENAME}/dispatches",
-        "-f", f"ref={branch}",
+        "gh", "workflow", "run", WORKFLOW_FILENAME,
+        "--repo", repo, "--ref", branch,
     ]
     for k, v in inputs.items():
         if v is None or v == "":
