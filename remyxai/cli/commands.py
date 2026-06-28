@@ -24,7 +24,10 @@ from remyxai.cli.interest_actions import (
     handle_interests_delete,
     handle_interests_toggle,
 )
-from remyxai.cli.outrider_actions import handle_outrider_init
+from remyxai.cli.outrider_actions import (
+    handle_outrider_init,
+    handle_outrider_trigger,
+)
 from remyxai.cli.outrider_local import handle_outrider_setup_local
 
 
@@ -687,6 +690,61 @@ def outrider_setup_local(
         anthropic_key=anthropic_key,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
+    )
+
+
+@outrider.command("trigger")
+@click.option("--repo", "repo", default=None,
+              help=(
+                  "Target repo as owner/name or a GitHub URL. Defaults to "
+                  "detecting from the current directory's git remote."
+              ))
+@click.option("--pin-method", "pin_method", default=None,
+              help=(
+                  "Method/technique query (e.g. \"knowledge distillation\") "
+                  "or a literal arxiv_id. The action's selection pass is "
+                  "bypassed and the resolved paper is implemented directly. "
+                  "Mutually exclusive with --pin-arxiv."
+              ))
+@click.option("--pin-arxiv", "pin_arxiv", default=None,
+              help=(
+                  "arxiv_id of a paper in the repo's candidate pool to "
+                  "implement directly. Use --pin-method for arxiv_ids not "
+                  "in the pool (it does a direct asset lookup)."
+              ))
+@click.option("--interest", "-i", "interest_id", default=None,
+              help="Override the ResearchInterest UUID for this run.")
+@click.option("--ref", "ref", default=None,
+              help="Git ref to dispatch on. Defaults to the repo's default "
+                   "branch.")
+def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref):
+    """
+    Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
+
+    Useful for kicking off ad-hoc method-targeted PRs without waiting for
+    the next scheduled run. The repo must already have an Outrider workflow
+    installed (see `remyxai outrider init` / `setup-local`). Authenticates
+    via your local `gh` CLI — no Remyx engine round-trip.
+
+    Examples:
+
+      # Implement a specific method on a target repo
+      remyxai outrider trigger --repo owner/name \\
+        --pin-method "knowledge distillation"
+
+      # Re-run a previously surfaced paper by arxiv_id (works even if it's
+      # no longer in the candidate pool)
+      remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2
+
+      # Plain trigger — let the normal selection pass run
+      remyxai outrider trigger --repo owner/name
+    """
+    handle_outrider_trigger(
+        repo=repo,
+        pin_method=pin_method,
+        pin_arxiv=pin_arxiv,
+        interest_id=interest_id,
+        ref=ref,
     )
 
 
