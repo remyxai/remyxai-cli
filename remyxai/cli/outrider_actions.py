@@ -391,6 +391,103 @@ def handle_outrider_init(
         )
 
 
+# ─── bulk-repos onboarding ────────────────────────────────────────────────
+
+def _parse_bulk_repos_tsv(path: str) -> list:
+    """Read a TSV mapping repos to ResearchInterest UUIDs.
+
+    Format: one row per repo, two tab-separated columns:
+
+        owner/name<TAB>interest-uuid
+
+    Blank lines and ``#``-prefixed comments are skipped. Lines with the
+    wrong column count or a malformed UUID are surfaced with their line
+    number so the caller can fix-then-retry without partial state.
+
+    Returns: list of ``(repo, interest_uuid)`` tuples in file order.
+    """
+    if not os.path.exists(path):
+        raise click.UsageError(f"--bulk-repos file not found: {path}")
+    rows = []
+    errors = []
+    with open(path) as fh:
+        for line_no, raw in enumerate(fh, start=1):
+            line = raw.rstrip("\n").rstrip("\r")
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 2:
+                errors.append(
+                    f"line {line_no}: expected 2 tab-separated columns "
+                    f"(repo<TAB>interest_uuid), got {len(parts)}: {line!r}"
+                )
+                continue
+            repo_raw, uuid_raw = parts[0].strip(), parts[1].strip()
+            repo = _normalize_repo(repo_raw)
+            if not repo:
+                errors.append(
+                    f"line {line_no}: not a valid GitHub repo: {repo_raw!r}"
+                )
+                continue
+            if not UUID_RE.match(uuid_raw):
+                errors.append(
+                    f"line {line_no}: not a valid UUID: {uuid_raw!r}"
+                )
+                continue
+            rows.append((repo, uuid_raw))
+    if errors:
+        raise click.UsageError(
+            "--bulk-repos parse errors:\n  " + "\n  ".join(errors)
+        )
+    if not rows:
+        raise click.UsageError(
+            f"--bulk-repos file {path!r} contains no installable rows."
+        )
+    return rows
+
+
+def _run_bulk(
+    handler, rows, common_kwargs, pace_s=3,
+    echo=click.echo,
+):
+    """Run ``handler(repo=..., interest_id=..., **common_kwargs)`` per row.
+
+    Per-row exceptions are captured and reported in a summary at the end —
+    one failure does not abort the remaining rows, since the most common
+    error class (an already-installed fork, a permission edge case) is
+    independent across repos.
+
+    Returns: list of ``(repo, status)`` tuples where status is ``"ok"`` or
+    the exception message. Caller can post-filter for retry.
+    """
+    import time
+
+    results = []
+    for i, (repo, uuid) in enumerate(rows, start=1):
+        echo(f"\n── [{i}/{len(rows)}] {repo} ──")
+        try:
+            handler(repo=repo, interest_id=uuid, **common_kwargs)
+            results.append((repo, "ok"))
+        except click.ClickException as e:
+            echo(f"  ✗ {e.message}")
+            results.append((repo, e.message))
+        except Exception as e:
+            echo(f"  ✗ {type(e).__name__}: {e}")
+            results.append((repo, f"{type(e).__name__}: {e}"))
+        if i < len(rows) and pace_s > 0:
+            time.sleep(pace_s)
+
+    # Summary
+    ok = [r for r, s in results if s == "ok"]
+    failed = [(r, s) for r, s in results if s != "ok"]
+    echo("")
+    click.secho(f"== summary: {len(ok)}/{len(rows)} ok ==", bold=True)
+    for repo, msg in failed:
+        echo(f"  ✗ {repo}: {msg}")
+    return results
+
+
 # ─── outrider trigger ─────────────────────────────────────────────────────
 
 WORKFLOW_FILENAME = "outrider.yml"
