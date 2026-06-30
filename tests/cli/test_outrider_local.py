@@ -26,9 +26,51 @@ def test_render_uses_builtin_github_token():
 
 
 def test_render_declares_remyx_and_model_secrets():
+    """REMYX_API_KEY is set as a job-level env var (it's needed across
+    every step); ANTHROPIC_API_KEY and ZAI_API_KEY are accessed via
+    ``secrets.*`` inside the Configure-backend-auth step rather than
+    set unconditionally, so a non-default backend dispatch doesn't get
+    both auth vars set (which Claude Code would resolve in favor of
+    the x-api-key path that non-Anthropic backends reject)."""
     wf = outrider_local._render_local_workflow("uuid")
     assert "REMYX_API_KEY: ${{ secrets.REMYX_API_KEY }}" in wf
-    assert "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}" in wf
+    # Configure step references both Anthropic + z.ai secrets via env.
+    assert "ANTHROPIC_API_KEY_SECRET: ${{ secrets.ANTHROPIC_API_KEY }}" in wf
+    assert "ZAI_API_KEY_SECRET: ${{ secrets.ZAI_API_KEY }}" in wf
+    # The legacy unconditional job-level ANTHROPIC_API_KEY env line is
+    # GONE — its presence would trip the action's startup auth-guard
+    # mutual-exclusion warning on every backend=glm dispatch.
+    assert "      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}" not in wf
+
+
+def test_render_declares_backend_input_and_configure_step():
+    """Workflow exposes a `backend` workflow_dispatch input + a step
+    that writes the right auth env var to $GITHUB_ENV based on it."""
+    wf = outrider_local._render_local_workflow("uuid")
+
+    # workflow_dispatch input declaration
+    assert "      backend:" in wf
+    assert "type: choice" in wf
+    for opt in ("- anthropic", "- glm"):
+        assert opt in wf, f"missing backend option: {opt}"
+    assert "default: 'anthropic'" in wf
+
+    # Configure backend auth step
+    assert "name: Configure backend auth" in wf
+    # Picks the right env var based on inputs.backend.
+    assert "if [ \"${{ inputs.backend }}\" = \"glm\" ]; then" in wf
+    assert 'echo "ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY_SECRET" >> "$GITHUB_ENV"' in wf
+    assert 'echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY_SECRET" >> "$GITHUB_ENV"' in wf
+
+
+def test_render_forwards_model_base_url_for_glm_backend():
+    """The action's model-base-url input is set to z.ai's endpoint
+    when backend=glm, empty otherwise (default Anthropic)."""
+    wf = outrider_local._render_local_workflow("uuid")
+    assert (
+        "model-base-url: ${{ inputs.backend == 'glm' "
+        "&& 'https://api.z.ai/api/anthropic' || '' }}"
+    ) in wf
 
 
 def test_render_declares_workflow_dispatch_inputs():

@@ -29,6 +29,7 @@ from remyxai.cli.outrider_actions import (
     _run_bulk,
     handle_outrider_init,
     handle_outrider_trigger,
+    handle_set_backend_secret,
 )
 from remyxai.cli.outrider_local import handle_outrider_setup_local
 
@@ -844,6 +845,54 @@ def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeo
         claude_timeout=claude_timeout,
         backend=backend,
     )
+
+
+@outrider.command("set-backend-secret")
+@click.option("--repo", "repo", default=None,
+              help="Target repo (owner/name). Defaults to the cwd's git remote.")
+@click.option("--backend", "backend", required=True,
+              help=(
+                  "Which backend's API key this is for. Selects the "
+                  "secret name (anthropic→ANTHROPIC_API_KEY, glm→ZAI_API_KEY)."
+              ))
+@click.option("--key-from", "key_from", required=True,
+              type=click.Path(exists=True, dir_okay=False, readable=True),
+              help=(
+                  "Path to a file containing the API key (and nothing else). "
+                  "Use file input rather than stdin or --body to avoid the "
+                  "`gh secret set --body -` truncation trap."
+              ))
+def outrider_set_backend_secret(repo, backend, key_from):
+    """
+    Set the per-backend API-key secret on a target repo, safely.
+
+    Wraps `gh secret set` with the operational pitfalls handled:
+    reads the value from a file (never argv, never literal `--body -`
+    with disconnected stdin), strips one trailing newline, validates
+    length, refuses the literal "-" placeholder, and uses the
+    stdin-piped form of `gh secret set` so the value never appears
+    in process arguments.
+
+    Examples:
+
+      # Anthropic key for a fresh fork (rotation or initial setup
+      # outside the `outrider setup-local` flow)
+      remyxai outrider set-backend-secret \\
+        --repo your-fork/repo --backend anthropic \\
+        --key-from ~/anthropic-key
+
+      # z.ai key for A/B-testing the GLM backend on the same repo
+      remyxai outrider set-backend-secret \\
+        --repo your-fork/repo --backend glm \\
+        --key-from ~/zai-key
+
+    The matching workflow_dispatch input on the repo's outrider.yml
+    routes a dispatch with `--backend glm` at the configured z.ai
+    endpoint; the workflow's "Configure backend auth" step picks the
+    right env var (ANTHROPIC_AUTH_TOKEN vs ANTHROPIC_API_KEY) so
+    Claude Code uses the right auth header for the chosen backend.
+    """
+    handle_set_backend_secret(repo=repo, backend=backend, key_from=key_from)
 
 
 if __name__ == "__main__":

@@ -232,6 +232,14 @@ def _render_local_workflow(interest_id: str, no_cron: bool = False) -> str:
 on:
 {schedule_block}  workflow_dispatch:
     inputs:
+      backend:
+        description: 'Which model backend to route Claude Code at. anthropic = default api.anthropic.com; glm = z.ai GLM Coding Plan.'
+        type: choice
+        required: false
+        default: 'anthropic'
+        options:
+          - anthropic
+          - glm
       pin-method:
         description: 'Optional arxiv_id or method query to implement directly (bypasses selection).'
         required: false
@@ -255,8 +263,25 @@ jobs:
       issues: write
     env:
       REMYX_API_KEY: ${{{{ secrets.REMYX_API_KEY }}}}
-      ANTHROPIC_API_KEY: ${{{{ secrets.ANTHROPIC_API_KEY }}}}
+      # ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are written to
+      # $GITHUB_ENV by the "Configure backend auth" step below
+      # (one or the other, never both — non-Anthropic backends
+      # require Bearer auth via AUTH_TOKEN and reject x-api-key).
     steps:
+      # Per-dispatch backend routing. Default cron runs hit Anthropic
+      # (inputs.backend defaults to 'anthropic'); dispatch with
+      # `backend=glm` to route this one run at z.ai's GLM endpoint.
+      - name: Configure backend auth
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY_SECRET: ${{{{ secrets.ANTHROPIC_API_KEY }}}}
+          ZAI_API_KEY_SECRET: ${{{{ secrets.ZAI_API_KEY }}}}
+        run: |
+          if [ "${{{{ inputs.backend }}}}" = "glm" ]; then
+            echo "ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY_SECRET" >> "$GITHUB_ENV"
+          else
+            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY_SECRET" >> "$GITHUB_ENV"
+          fi
       - uses: remyxai/outrider@v1
         with:
           interest-id: {interest_id}
@@ -266,12 +291,16 @@ jobs:
           rate-limit-days: '0'
           # Forwarded from the workflow_dispatch inputs above so
           # `remyxai outrider trigger` (or a manual gh-workflow-run)
-          # can pin a paper or extend the implementation timeout per
-          # dispatch. Empty on scheduled runs — the action uses its
-          # own defaults.
+          # can pin a paper, extend the implementation timeout, or
+          # route at an alternate backend per dispatch. Empty on
+          # scheduled runs — the action uses its own defaults.
           pin-method: ${{{{ inputs.pin-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
           claude-timeout: ${{{{ inputs.claude-timeout }}}}
+          # Maps backend name → base URL. Adding more backends here
+          # extends the table (Bedrock / Vertex / on-prem); leave
+          # empty on the default Anthropic path.
+          model-base-url: ${{{{ inputs.backend == 'glm' && 'https://api.z.ai/api/anthropic' || '' }}}}
 """
 
 

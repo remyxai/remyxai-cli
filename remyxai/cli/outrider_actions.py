@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -663,3 +664,99 @@ def handle_outrider_trigger(
         click.echo(f"  Run: {url}")
     else:
         click.echo(f"  Run: https://github.com/{resolved_repo}/actions")
+
+
+# ─── set-backend-secret ───────────────────────────────────────────────────
+
+# Maps a backend name (matching the workflow's `backend` input choices) to
+# the GitHub Actions secret name the workflow's `Configure backend auth`
+# step reads. Anthropic-compat backends each have a conventional env var;
+# we mirror that convention here so customers don't have to look it up.
+_BACKEND_SECRET_NAMES = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "glm": "ZAI_API_KEY",
+}
+
+# Length below which a "secret" is almost certainly truncated or a
+# placeholder. The action's startup auth-guard hard-fails below 8 chars;
+# we warn earlier (16) because real API keys are typically 40+ chars
+# and 8–16 is already deep in the "you probably copy-pasted wrong"
+# territory.
+_SECRET_MIN_LENGTH_WARN = 16
+
+
+def handle_set_backend_secret(repo, backend, key_from):
+    """Set the per-backend API-key secret on a repo via stdin.
+
+    Wraps ``gh secret set`` with the pitfalls handled. Reads the key
+    from ``--key-from FILE`` (never argv, never literal stdin pipes),
+    avoiding the ``gh secret set --body -`` trap that stores a literal
+    ``"-"`` as the secret value when stdin is disconnected. Validates
+    length before sending so a clearly-truncated value is rejected at
+    the CLI boundary rather than after a wasted workflow run.
+
+    Backend name → secret name map:
+
+    - ``anthropic`` → ``ANTHROPIC_API_KEY``
+    - ``glm`` → ``ZAI_API_KEY``
+    """
+    if backend not in _BACKEND_SECRET_NAMES:
+        choices = ", ".join(sorted(_BACKEND_SECRET_NAMES))
+        raise click.UsageError(
+            f"--backend must be one of: {choices} (got {backend!r})"
+        )
+
+    resolved_repo = _normalize_repo(repo) if repo else _detect_github_repo_from_cwd()
+    if not resolved_repo:
+        raise click.UsageError(
+            "Could not determine target repo. Pass --repo owner/name or run "
+            "from inside a GitHub-origin git checkout."
+        )
+
+    key_path = Path(key_from)
+    if not key_path.exists() or not key_path.is_file():
+        raise click.ClickException(
+            f"--key-from path does not exist or is not a file: {key_from}"
+        )
+    # Strip a single trailing newline (the common shape from
+    # `printf '%s\n' "$KEY" > /tmp/key`); preserve everything else
+    # exactly so we don't quietly mutate the customer's secret value.
+    value = key_path.read_text().rstrip("\n")
+
+    if not value:
+        raise click.ClickException(
+            f"{key_from} is empty after reading; nothing to set."
+        )
+    if value == "-":
+        raise click.ClickException(
+            f"{key_from} contains the literal '-' character — that's the "
+            f"`gh secret set --body -` truncation footprint, not a real "
+            f"secret. Refusing to set."
+        )
+    if len(value) < _SECRET_MIN_LENGTH_WARN:
+        click.secho(
+            f"⚠ key in {key_from} is {len(value)} chars — unusually short for "
+            f"an API key. Proceeding, but the action's startup auth-guard may "
+            f"hard-fail if it's actually truncated.",
+            fg="yellow",
+        )
+
+    secret_name = _BACKEND_SECRET_NAMES[backend]
+
+    click.echo(
+        f"Setting secret {secret_name} on {resolved_repo} "
+        f"(backend={backend}, length={len(value)})…"
+    )
+    # Reuse the safe stdin-piped helper from outrider_local — it
+    # already handles 403 → admin-scope hints and never logs the
+    # value into argv.
+    from remyxai.cli.outrider_local import _gh_set_secret
+    _gh_set_secret(resolved_repo, secret_name, value)
+    click.secho(
+        f"✓ Set {secret_name} on {resolved_repo}.", fg="green", bold=True,
+    )
+    if backend == "glm":
+        click.echo(
+            "  Next: `remyxai outrider trigger --repo "
+            f"{resolved_repo} --backend glm --pin-method <arxiv>` to test."
+        )
