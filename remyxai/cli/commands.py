@@ -29,7 +29,7 @@ from remyxai.cli.outrider_actions import (
     _run_bulk,
     handle_outrider_init,
     handle_outrider_trigger,
-    handle_set_backend_secret,
+    handle_set_provider_secret,
 )
 from remyxai.cli.outrider_local import handle_outrider_setup_local
 
@@ -795,22 +795,29 @@ def outrider_setup_local(
                    "branch.")
 @click.option("--claude-timeout", "claude_timeout", type=int, default=None,
               help=(
-                  "Wall-clock seconds for the Claude Code implementation "
-                  "step on this dispatch. Default (unset) lets the "
-                  "action's own default apply (900s). Raise for very "
-                  "large monorepos where the agent runs out of time "
-                  "(especially when routing at slower non-Anthropic "
-                  "backends)."
+                  "Wall-clock seconds for the Claude Code agent calls "
+                  "on this dispatch (preflight + implementation share "
+                  "the budget). Default (unset) lets the action's own "
+                  "default apply (900s). Raise for very large monorepos "
+                  "or slower non-default providers."
               ))
-@click.option("--backend", "backend", default=None,
+@click.option("--provider", "provider", default=None,
               help=(
-                  "Route Claude Code at a specific model backend for "
-                  "this dispatch (e.g. 'anthropic', 'glm'). Requires the "
-                  "target workflow to declare a `backend` workflow_"
+                  "Route Claude Code at a specific model provider for "
+                  "this dispatch (e.g. 'anthropic', 'zai'). Requires the "
+                  "target workflow to declare a `provider` workflow_"
                   "dispatch input; if unset, the workflow's own default "
                   "applies."
               ))
-def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeout, backend):
+@click.option("--model", "model", default=None,
+              help=(
+                  "Specific model name to request from the provider "
+                  "(e.g. 'claude-opus-4-7', 'glm-5.2', 'glm-4.6'). "
+                  "Forwarded as the workflow_dispatch `model` input, "
+                  "which sets ANTHROPIC_MODEL in the action's env. "
+                  "Empty = provider picks its default."
+              ))
+def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeout, provider, model):
     """
     Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -829,6 +836,11 @@ def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeo
       # no longer in the candidate pool)
       remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2
 
+      # Route at z.ai's GLM-5.2 for this dispatch (Anthropic is the
+      # workflow's default; this overrides for one run)
+      remyxai outrider trigger --repo owner/name \\
+        --pin-method 2410.20305v2 --provider zai --model glm-5.2
+
       # Bump the implementation timeout for a very large monorepo
       remyxai outrider trigger --repo owner/name \\
         --pin-method 2410.20305v2 --claude-timeout 1800
@@ -843,17 +855,18 @@ def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeo
         interest_id=interest_id,
         ref=ref,
         claude_timeout=claude_timeout,
-        backend=backend,
+        provider=provider,
+        model=model,
     )
 
 
-@outrider.command("set-backend-secret")
+@outrider.command("set-provider-secret")
 @click.option("--repo", "repo", default=None,
               help="Target repo (owner/name). Defaults to the cwd's git remote.")
-@click.option("--backend", "backend", required=True,
+@click.option("--provider", "provider", required=True,
               help=(
-                  "Which backend's API key this is for. Selects the "
-                  "secret name (anthropic→ANTHROPIC_API_KEY, glm→ZAI_API_KEY)."
+                  "Which provider's API key this is for. Selects the "
+                  "secret name (anthropic→ANTHROPIC_API_KEY, zai→ZAI_API_KEY)."
               ))
 @click.option("--key-from", "key_from", required=True,
               type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -862,9 +875,9 @@ def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeo
                   "Use file input rather than stdin or --body to avoid the "
                   "`gh secret set --body -` truncation trap."
               ))
-def outrider_set_backend_secret(repo, backend, key_from):
+def outrider_set_provider_secret(repo, provider, key_from):
     """
-    Set the per-backend API-key secret on a target repo, safely.
+    Set the per-provider API-key secret on a target repo, safely.
 
     Wraps `gh secret set` with the operational pitfalls handled:
     reads the value from a file (never argv, never literal `--body -`
@@ -877,22 +890,23 @@ def outrider_set_backend_secret(repo, backend, key_from):
 
       # Anthropic key for a fresh fork (rotation or initial setup
       # outside the `outrider setup-local` flow)
-      remyxai outrider set-backend-secret \\
-        --repo your-fork/repo --backend anthropic \\
+      remyxai outrider set-provider-secret \\
+        --repo your-fork/repo --provider anthropic \\
         --key-from ~/anthropic-key
 
-      # z.ai key for A/B-testing the GLM backend on the same repo
-      remyxai outrider set-backend-secret \\
-        --repo your-fork/repo --backend glm \\
+      # z.ai key for A/B-testing GLM models on the same repo
+      remyxai outrider set-provider-secret \\
+        --repo your-fork/repo --provider zai \\
         --key-from ~/zai-key
 
     The matching workflow_dispatch input on the repo's outrider.yml
-    routes a dispatch with `--backend glm` at the configured z.ai
-    endpoint; the workflow's "Configure backend auth" step picks the
-    right env var (ANTHROPIC_AUTH_TOKEN vs ANTHROPIC_API_KEY) so
-    Claude Code uses the right auth header for the chosen backend.
+    routes a dispatch with `--provider zai --model glm-5.2` at the
+    configured z.ai endpoint; the workflow's "Configure provider auth"
+    step picks the right env var (ANTHROPIC_AUTH_TOKEN vs
+    ANTHROPIC_API_KEY) so Claude Code uses the right auth header
+    for the chosen provider.
     """
-    handle_set_backend_secret(repo=repo, backend=backend, key_from=key_from)
+    handle_set_provider_secret(repo=repo, provider=provider, key_from=key_from)
 
 
 if __name__ == "__main__":

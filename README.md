@@ -156,8 +156,8 @@ Run any command with `--help` for full flag listings and examples.
 | `remyxai interests delete <id>` | Remove an interest |
 | `remyxai outrider init` | Install Outrider on a GitHub repo via the Remyx App |
 | `remyxai outrider setup-local` | Install Outrider via your own `gh` (no Remyx App) |
-| `remyxai outrider trigger` | Dispatch a one-shot Outrider run; supports `--pin-method` / `--pin-arxiv` / `--backend` / `--claude-timeout` |
-| `remyxai outrider set-backend-secret` | Set a per-backend API-key secret on a repo, safely (avoids the `gh secret set --body -` truncation trap) |
+| `remyxai outrider trigger` | Dispatch a one-shot Outrider run; supports `--pin-method` / `--pin-arxiv` / `--provider` / `--model` / `--claude-timeout` |
+| `remyxai outrider set-provider-secret` | Set a per-provider API-key secret on a repo, safely (avoids the `gh secret set --body -` truncation trap) |
 | `remyxai search query <text>` | Search the engine's research-asset catalog |
 | `remyxai search list` | List recently added research assets (papers + Docker images) |
 | `remyxai search info <arxiv-id>` | Asset details |

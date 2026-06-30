@@ -1,11 +1,11 @@
-"""Tests for `remyxai outrider set-backend-secret`.
+"""Tests for `remyxai outrider set-provider-secret`.
 
 Covers:
-- Backend name → secret name mapping (anthropic → ANTHROPIC_API_KEY,
-  glm → ZAI_API_KEY).
-- Rejection of unknown backend names at the CLI boundary.
+- Provider name → secret name mapping (anthropic → ANTHROPIC_API_KEY,
+  zai → ZAI_API_KEY).
+- Rejection of unknown provider names at the CLI boundary.
 - File-input safety: trailing newline stripped, but no other mutation.
-- Empty / literal-"-" / unknown-backend / nonexistent-file all rejected
+- Empty / literal-"-" / unknown-provider / nonexistent-file all rejected
   before any `gh` call.
 - Short-but-non-empty key warns but proceeds (the action's startup
   auth-guard is the hard-fail line).
@@ -13,7 +13,7 @@ Covers:
   always piped via stdin.
 - End-to-end through the click runner.
 
-Run with: pytest tests/cli/test_set_backend_secret.py -q
+Run with: pytest tests/cli/test_set_provider_secret.py -q
 """
 from pathlib import Path
 from unittest.mock import patch
@@ -35,18 +35,18 @@ def _write_key(tmp_path, name: str, content: str) -> Path:
     return p
 
 
-def test_rejects_unknown_backend(tmp_path):
+def test_rejects_unknown_provider(tmp_path):
     k = _write_key(tmp_path, "k", "sk-ant-fakebutlongenough12345")
     with pytest.raises(click.UsageError, match="must be one of"):
-        outrider_actions.handle_set_backend_secret(
-            repo="owner/name", backend="bedrock", key_from=str(k),
+        outrider_actions.handle_set_provider_secret(
+            repo="owner/name", provider="bedrock", key_from=str(k),
         )
 
 
 def test_rejects_missing_key_file():
     with pytest.raises(click.ClickException, match="does not exist"):
-        outrider_actions.handle_set_backend_secret(
-            repo="owner/name", backend="glm",
+        outrider_actions.handle_set_provider_secret(
+            repo="owner/name", provider="zai",
             key_from="/nonexistent/path/to/key",
         )
 
@@ -56,16 +56,16 @@ def test_rejects_literal_dash_value(tmp_path):
     footprint — refuse to forward it."""
     k = _write_key(tmp_path, "k", "-")
     with pytest.raises(click.ClickException, match="literal '-'"):
-        outrider_actions.handle_set_backend_secret(
-            repo="owner/name", backend="glm", key_from=str(k),
+        outrider_actions.handle_set_provider_secret(
+            repo="owner/name", provider="zai", key_from=str(k),
         )
 
 
 def test_rejects_empty_value(tmp_path):
     k = _write_key(tmp_path, "k", "")
     with pytest.raises(click.ClickException, match="empty"):
-        outrider_actions.handle_set_backend_secret(
-            repo="owner/name", backend="glm", key_from=str(k),
+        outrider_actions.handle_set_provider_secret(
+            repo="owner/name", provider="zai", key_from=str(k),
         )
 
 
@@ -73,8 +73,8 @@ def test_rejects_empty_after_newline_strip(tmp_path):
     """A file with just a newline is still empty after the rstrip."""
     k = _write_key(tmp_path, "k", "\n")
     with pytest.raises(click.ClickException, match="empty"):
-        outrider_actions.handle_set_backend_secret(
-            repo="owner/name", backend="anthropic", key_from=str(k),
+        outrider_actions.handle_set_provider_secret(
+            repo="owner/name", provider="anthropic", key_from=str(k),
         )
 
 
@@ -92,14 +92,14 @@ def test_strips_single_trailing_newline(tmp_path, monkeypatch):
     import remyxai.cli.outrider_local as outrider_local
     monkeypatch.setattr(outrider_local, "_gh_set_secret", fake_gh_set_secret)
 
-    outrider_actions.handle_set_backend_secret(
-        repo="owner/name", backend="anthropic", key_from=str(k),
+    outrider_actions.handle_set_provider_secret(
+        repo="owner/name", provider="anthropic", key_from=str(k),
     )
     assert captured["value"] == "sk-ant-fakebutlongenough12345"
     assert not captured["value"].endswith("\n")
 
 
-def test_anthropic_backend_maps_to_anthropic_api_key(tmp_path, monkeypatch):
+def test_anthropic_provider_maps_to_anthropic_api_key(tmp_path, monkeypatch):
     k = _write_key(tmp_path, "k", "sk-ant-fakebutlongenough12345")
     captured = {}
 
@@ -109,13 +109,13 @@ def test_anthropic_backend_maps_to_anthropic_api_key(tmp_path, monkeypatch):
     import remyxai.cli.outrider_local as outrider_local
     monkeypatch.setattr(outrider_local, "_gh_set_secret", fake_gh_set_secret)
 
-    outrider_actions.handle_set_backend_secret(
-        repo="owner/name", backend="anthropic", key_from=str(k),
+    outrider_actions.handle_set_provider_secret(
+        repo="owner/name", provider="anthropic", key_from=str(k),
     )
     assert captured["name"] == "ANTHROPIC_API_KEY"
 
 
-def test_glm_backend_maps_to_zai_api_key(tmp_path, monkeypatch):
+def test_zai_provider_maps_to_zai_api_key(tmp_path, monkeypatch):
     k = _write_key(tmp_path, "k", "zai-fakebutlongenough1234567890")
     captured = {}
 
@@ -125,8 +125,8 @@ def test_glm_backend_maps_to_zai_api_key(tmp_path, monkeypatch):
     import remyxai.cli.outrider_local as outrider_local
     monkeypatch.setattr(outrider_local, "_gh_set_secret", fake_gh_set_secret)
 
-    outrider_actions.handle_set_backend_secret(
-        repo="owner/name", backend="glm", key_from=str(k),
+    outrider_actions.handle_set_provider_secret(
+        repo="owner/name", provider="zai", key_from=str(k),
     )
     assert captured["name"] == "ZAI_API_KEY"
 
@@ -145,8 +145,8 @@ def test_short_value_warns_but_proceeds(tmp_path, monkeypatch, capsys):
     import remyxai.cli.outrider_local as outrider_local
     monkeypatch.setattr(outrider_local, "_gh_set_secret", fake_gh_set_secret)
 
-    outrider_actions.handle_set_backend_secret(
-        repo="owner/name", backend="glm", key_from=str(k),
+    outrider_actions.handle_set_provider_secret(
+        repo="owner/name", provider="zai", key_from=str(k),
     )
     assert called["count"] == 1                   # still proceeded
     out = capsys.readouterr().out
@@ -176,8 +176,8 @@ def test_value_is_piped_not_in_argv(tmp_path, monkeypatch):
         "remyxai.cli.outrider_local.subprocess.run", fake_run,
     )
 
-    outrider_actions.handle_set_backend_secret(
-        repo="owner/name", backend="anthropic", key_from=str(k),
+    outrider_actions.handle_set_provider_secret(
+        repo="owner/name", provider="anthropic", key_from=str(k),
     )
     # The secret value never appears in any captured command line.
     for cmd in captured_cmds:
@@ -188,7 +188,7 @@ def test_value_is_piped_not_in_argv(tmp_path, monkeypatch):
 # ─── CLI integration via click runner ────────────────────────────────────
 
 
-def test_cli_set_backend_secret_happy_path(tmp_path, monkeypatch):
+def test_cli_set_provider_secret_happy_path(tmp_path, monkeypatch):
     k = _write_key(tmp_path, "k", "sk-ant-fakebutlongenough12345")
     captured = {}
 
@@ -202,9 +202,9 @@ def test_cli_set_backend_secret_happy_path(tmp_path, monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(cli, [
-        "outrider", "set-backend-secret",
+        "outrider", "set-provider-secret",
         "--repo", "owner/name",
-        "--backend", "anthropic",
+        "--provider", "anthropic",
         "--key-from", str(k),
     ])
     assert result.exit_code == 0, result.output
@@ -213,36 +213,36 @@ def test_cli_set_backend_secret_happy_path(tmp_path, monkeypatch):
     assert "✓ Set ANTHROPIC_API_KEY" in result.output
 
 
-def test_cli_set_backend_secret_requires_backend(tmp_path):
+def test_cli_set_provider_secret_requires_provider(tmp_path):
     k = _write_key(tmp_path, "k", "sk-ant-fakebutlongenough12345")
     runner = CliRunner()
     result = runner.invoke(cli, [
-        "outrider", "set-backend-secret",
+        "outrider", "set-provider-secret",
         "--repo", "owner/name",
         "--key-from", str(k),
     ])
     assert result.exit_code != 0
-    assert "backend" in result.output.lower()
+    assert "provider" in result.output.lower()
 
 
-def test_cli_set_backend_secret_requires_key_from(tmp_path):
+def test_cli_set_provider_secret_requires_key_from(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, [
-        "outrider", "set-backend-secret",
+        "outrider", "set-provider-secret",
         "--repo", "owner/name",
-        "--backend", "anthropic",
+        "--provider", "anthropic",
     ])
     assert result.exit_code != 0
     assert "key-from" in result.output.lower()
 
 
-def test_cli_set_backend_secret_nonexistent_file_via_click():
+def test_cli_set_provider_secret_nonexistent_file_via_click():
     """Click's `type=click.Path(exists=True)` rejects at the boundary."""
     runner = CliRunner()
     result = runner.invoke(cli, [
-        "outrider", "set-backend-secret",
+        "outrider", "set-provider-secret",
         "--repo", "owner/name",
-        "--backend", "glm",
+        "--provider", "zai",
         "--key-from", "/nonexistent/file",
     ])
     assert result.exit_code != 0

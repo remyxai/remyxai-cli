@@ -25,13 +25,13 @@ def test_render_uses_builtin_github_token():
     assert "rate-limit-days: '0'" in wf                   # don't suppress manual/scheduled runs
 
 
-def test_render_declares_remyx_and_model_secrets():
+def test_render_declares_remyx_and_provider_secrets():
     """REMYX_API_KEY is set as a job-level env var (it's needed across
     every step); ANTHROPIC_API_KEY and ZAI_API_KEY are accessed via
-    ``secrets.*`` inside the Configure-backend-auth step rather than
-    set unconditionally, so a non-default backend dispatch doesn't get
-    both auth vars set (which Claude Code would resolve in favor of
-    the x-api-key path that non-Anthropic backends reject)."""
+    ``secrets.*`` inside the Configure-provider-auth step rather than
+    set unconditionally, so a non-default provider dispatch doesn't
+    get both auth vars set (which Claude Code would resolve in favor
+    of the x-api-key path that non-Anthropic providers reject)."""
     wf = outrider_local._render_local_workflow("uuid")
     assert "REMYX_API_KEY: ${{ secrets.REMYX_API_KEY }}" in wf
     # Configure step references both Anthropic + z.ai secrets via env.
@@ -39,38 +39,56 @@ def test_render_declares_remyx_and_model_secrets():
     assert "ZAI_API_KEY_SECRET: ${{ secrets.ZAI_API_KEY }}" in wf
     # The legacy unconditional job-level ANTHROPIC_API_KEY env line is
     # GONE — its presence would trip the action's startup auth-guard
-    # mutual-exclusion warning on every backend=glm dispatch.
+    # mutual-exclusion warning on every provider=zai dispatch.
     assert "      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}" not in wf
 
 
-def test_render_declares_backend_input_and_configure_step():
-    """Workflow exposes a `backend` workflow_dispatch input + a step
+def test_render_declares_provider_input_and_configure_step():
+    """Workflow exposes a `provider` workflow_dispatch input + a step
     that writes the right auth env var to $GITHUB_ENV based on it."""
     wf = outrider_local._render_local_workflow("uuid")
 
     # workflow_dispatch input declaration
-    assert "      backend:" in wf
+    assert "      provider:" in wf
     assert "type: choice" in wf
-    for opt in ("- anthropic", "- glm"):
-        assert opt in wf, f"missing backend option: {opt}"
+    for opt in ("- anthropic", "- zai"):
+        assert opt in wf, f"missing provider option: {opt}"
     assert "default: 'anthropic'" in wf
 
-    # Configure backend auth step
-    assert "name: Configure backend auth" in wf
-    # Picks the right env var based on inputs.backend.
-    assert "if [ \"${{ inputs.backend }}\" = \"glm\" ]; then" in wf
+    # Configure provider auth step
+    assert "name: Configure provider auth" in wf
+    # Picks the right env var based on inputs.provider.
+    assert "if [ \"${{ inputs.provider }}\" = \"zai\" ]; then" in wf
     assert 'echo "ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY_SECRET" >> "$GITHUB_ENV"' in wf
     assert 'echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY_SECRET" >> "$GITHUB_ENV"' in wf
 
 
-def test_render_forwards_model_base_url_for_glm_backend():
+def test_render_forwards_model_base_url_for_zai_provider():
     """The action's model-base-url input is set to z.ai's endpoint
-    when backend=glm, empty otherwise (default Anthropic)."""
+    when provider=zai, empty otherwise (default Anthropic)."""
     wf = outrider_local._render_local_workflow("uuid")
     assert (
-        "model-base-url: ${{ inputs.backend == 'glm' "
+        "model-base-url: ${{ inputs.provider == 'zai' "
         "&& 'https://api.z.ai/api/anthropic' || '' }}"
     ) in wf
+
+
+def test_render_declares_model_input_and_configure_step_sets_env():
+    """The `model` workflow_dispatch input lets dispatches pick a
+    specific model (glm-5.2, glm-4.6, claude-opus-4-7, ...). The
+    Configure step writes ANTHROPIC_MODEL=<value> to $GITHUB_ENV
+    when the input is non-empty; the action reads ANTHROPIC_MODEL
+    as part of its env passthrough."""
+    wf = outrider_local._render_local_workflow("uuid")
+    # Input declaration
+    assert "      model:" in wf
+    # Configure step picks it up via env so it doesn't have to be
+    # interpolated into the shell line.
+    assert "MODEL_INPUT: ${{ inputs.model }}" in wf
+    assert 'echo "ANTHROPIC_MODEL=$MODEL_INPUT" >> "$GITHUB_ENV"' in wf
+    # Guard: empty model leaves ANTHROPIC_MODEL unset rather than
+    # writing a blank value into $GITHUB_ENV.
+    assert 'if [ -n "$MODEL_INPUT" ]; then' in wf
 
 
 def test_render_declares_workflow_dispatch_inputs():

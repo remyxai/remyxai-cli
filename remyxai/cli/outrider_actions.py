@@ -566,7 +566,7 @@ def _gh_latest_run_url(repo, sleep=time.sleep):
 
 def handle_outrider_trigger(
     repo, pin_method, pin_arxiv, interest_id, ref, claude_timeout=None,
-    backend=None,
+    provider=None, model=None,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -630,17 +630,19 @@ def handle_outrider_trigger(
         # always strings on the wire. The action's INPUT_CLAUDE_TIMEOUT
         # parser handles the int conversion (and validates it).
         "claude-timeout": str(claude_timeout) if claude_timeout else "",
-        # The target workflow must declare `backend` as a workflow_
-        # dispatch input for this to take effect; CLI-generated
-        # workflows on currently-shipped templates don't, but
-        # backend-switching templates (hand-edited or future template
-        # versions) do.
-        "backend": backend or "",
+        # The target workflow must declare `provider` + `model` as
+        # workflow_dispatch inputs for these to take effect. The
+        # current CLI-generated template does; older templates and
+        # hand-rolled workflows may need updating.
+        "provider": provider or "",
+        "model": model or "",
     }
 
     click.echo(f"Dispatching Outrider on {resolved_repo} (ref={branch})…")
-    if backend:
-        click.echo(f"  backend:        {backend}")
+    if provider:
+        click.echo(f"  provider:       {provider}")
+    if model:
+        click.echo(f"  model:          {model}")
     if pin_method:
         click.echo(f"  pin-method:     {pin_method!r}")
     if pin_arxiv:
@@ -666,15 +668,15 @@ def handle_outrider_trigger(
         click.echo(f"  Run: https://github.com/{resolved_repo}/actions")
 
 
-# ─── set-backend-secret ───────────────────────────────────────────────────
+# ─── set-provider-secret ──────────────────────────────────────────────────
 
-# Maps a backend name (matching the workflow's `backend` input choices) to
-# the GitHub Actions secret name the workflow's `Configure backend auth`
-# step reads. Anthropic-compat backends each have a conventional env var;
-# we mirror that convention here so customers don't have to look it up.
-_BACKEND_SECRET_NAMES = {
+# Maps a provider name (matching the workflow's `provider` input choices)
+# to the GitHub Actions secret name the workflow's `Configure provider
+# auth` step reads. Each provider has a conventional env var name; we
+# mirror that convention here so customers don't have to look it up.
+_PROVIDER_SECRET_NAMES = {
     "anthropic": "ANTHROPIC_API_KEY",
-    "glm": "ZAI_API_KEY",
+    "zai": "ZAI_API_KEY",
 }
 
 # Length below which a "secret" is almost certainly truncated or a
@@ -685,8 +687,8 @@ _BACKEND_SECRET_NAMES = {
 _SECRET_MIN_LENGTH_WARN = 16
 
 
-def handle_set_backend_secret(repo, backend, key_from):
-    """Set the per-backend API-key secret on a repo via stdin.
+def handle_set_provider_secret(repo, provider, key_from):
+    """Set the per-provider API-key secret on a repo via stdin.
 
     Wraps ``gh secret set`` with the pitfalls handled. Reads the key
     from ``--key-from FILE`` (never argv, never literal stdin pipes),
@@ -695,15 +697,15 @@ def handle_set_backend_secret(repo, backend, key_from):
     length before sending so a clearly-truncated value is rejected at
     the CLI boundary rather than after a wasted workflow run.
 
-    Backend name → secret name map:
+    Provider name → secret name map:
 
     - ``anthropic`` → ``ANTHROPIC_API_KEY``
-    - ``glm`` → ``ZAI_API_KEY``
+    - ``zai`` → ``ZAI_API_KEY``
     """
-    if backend not in _BACKEND_SECRET_NAMES:
-        choices = ", ".join(sorted(_BACKEND_SECRET_NAMES))
+    if provider not in _PROVIDER_SECRET_NAMES:
+        choices = ", ".join(sorted(_PROVIDER_SECRET_NAMES))
         raise click.UsageError(
-            f"--backend must be one of: {choices} (got {backend!r})"
+            f"--provider must be one of: {choices} (got {provider!r})"
         )
 
     resolved_repo = _normalize_repo(repo) if repo else _detect_github_repo_from_cwd()
@@ -741,11 +743,11 @@ def handle_set_backend_secret(repo, backend, key_from):
             fg="yellow",
         )
 
-    secret_name = _BACKEND_SECRET_NAMES[backend]
+    secret_name = _PROVIDER_SECRET_NAMES[provider]
 
     click.echo(
         f"Setting secret {secret_name} on {resolved_repo} "
-        f"(backend={backend}, length={len(value)})…"
+        f"(provider={provider}, length={len(value)})…"
     )
     # Reuse the safe stdin-piped helper from outrider_local — it
     # already handles 403 → admin-scope hints and never logs the
@@ -755,8 +757,9 @@ def handle_set_backend_secret(repo, backend, key_from):
     click.secho(
         f"✓ Set {secret_name} on {resolved_repo}.", fg="green", bold=True,
     )
-    if backend == "glm":
+    if provider == "zai":
         click.echo(
             "  Next: `remyxai outrider trigger --repo "
-            f"{resolved_repo} --backend glm --pin-method <arxiv>` to test."
+            f"{resolved_repo} --provider zai --model glm-5.2 "
+            f"--pin-method <arxiv>` to test."
         )

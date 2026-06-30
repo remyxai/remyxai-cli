@@ -232,14 +232,18 @@ def _render_local_workflow(interest_id: str, no_cron: bool = False) -> str:
 on:
 {schedule_block}  workflow_dispatch:
     inputs:
-      backend:
-        description: 'Which model backend to route Claude Code at. anthropic = default api.anthropic.com; glm = z.ai GLM Coding Plan.'
+      provider:
+        description: 'Which model provider to route Claude Code at. anthropic = default api.anthropic.com; zai = z.ai (GLM family).'
         type: choice
         required: false
         default: 'anthropic'
         options:
           - anthropic
-          - glm
+          - zai
+      model:
+        description: 'Specific model name to request from the provider (e.g. claude-opus-4-7, glm-5.2, glm-4.6). Empty = let the provider pick its default.'
+        required: false
+        default: ''
       pin-method:
         description: 'Optional arxiv_id or method query to implement directly (bypasses selection).'
         required: false
@@ -249,7 +253,7 @@ on:
         required: false
         default: ''
       claude-timeout:
-        description: 'Wall-clock seconds for the Claude Code implementation step. Raise for very large monorepos; lower to cap cost.'
+        description: 'Wall-clock seconds for the Claude Code agent calls (preflight + implementation). Raise for very large monorepos; lower to cap cost.'
         required: false
         default: '900'
 
@@ -263,24 +267,30 @@ jobs:
       issues: write
     env:
       REMYX_API_KEY: ${{{{ secrets.REMYX_API_KEY }}}}
-      # ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are written to
-      # $GITHUB_ENV by the "Configure backend auth" step below
-      # (one or the other, never both — non-Anthropic backends
-      # require Bearer auth via AUTH_TOKEN and reject x-api-key).
+      # ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL are
+      # written to $GITHUB_ENV by the "Configure provider auth" step
+      # below (auth env vars are mutually exclusive — non-Anthropic
+      # providers require Bearer auth via AUTH_TOKEN and reject the
+      # x-api-key path; ANTHROPIC_MODEL is optional and only set
+      # when the workflow_dispatch input is non-empty).
     steps:
-      # Per-dispatch backend routing. Default cron runs hit Anthropic
-      # (inputs.backend defaults to 'anthropic'); dispatch with
-      # `backend=glm` to route this one run at z.ai's GLM endpoint.
-      - name: Configure backend auth
+      # Per-dispatch provider + model routing. Default cron runs hit
+      # Anthropic (inputs.provider defaults to 'anthropic'); dispatch
+      # with `provider=zai` to route one run at z.ai's endpoint.
+      - name: Configure provider auth
         shell: bash
         env:
           ANTHROPIC_API_KEY_SECRET: ${{{{ secrets.ANTHROPIC_API_KEY }}}}
           ZAI_API_KEY_SECRET: ${{{{ secrets.ZAI_API_KEY }}}}
+          MODEL_INPUT: ${{{{ inputs.model }}}}
         run: |
-          if [ "${{{{ inputs.backend }}}}" = "glm" ]; then
+          if [ "${{{{ inputs.provider }}}}" = "zai" ]; then
             echo "ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY_SECRET" >> "$GITHUB_ENV"
           else
             echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY_SECRET" >> "$GITHUB_ENV"
+          fi
+          if [ -n "$MODEL_INPUT" ]; then
+            echo "ANTHROPIC_MODEL=$MODEL_INPUT" >> "$GITHUB_ENV"
           fi
       - uses: remyxai/outrider@v1
         with:
@@ -292,15 +302,15 @@ jobs:
           # Forwarded from the workflow_dispatch inputs above so
           # `remyxai outrider trigger` (or a manual gh-workflow-run)
           # can pin a paper, extend the implementation timeout, or
-          # route at an alternate backend per dispatch. Empty on
+          # route at an alternate provider per dispatch. Empty on
           # scheduled runs — the action uses its own defaults.
           pin-method: ${{{{ inputs.pin-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
           claude-timeout: ${{{{ inputs.claude-timeout }}}}
-          # Maps backend name → base URL. Adding more backends here
+          # Maps provider name → base URL. Adding more providers here
           # extends the table (Bedrock / Vertex / on-prem); leave
           # empty on the default Anthropic path.
-          model-base-url: ${{{{ inputs.backend == 'glm' && 'https://api.z.ai/api/anthropic' || '' }}}}
+          model-base-url: ${{{{ inputs.provider == 'zai' && 'https://api.z.ai/api/anthropic' || '' }}}}
 """
 
 

@@ -73,34 +73,46 @@ The two flags are mutually exclusive — setting both is a usage error.
 | `--repo owner/name` | cwd's git remote | Target repo |
 | `--interest <uuid>` | the workflow's configured interest | Override the Research Interest for this run |
 | `--ref <branch>` | the repo's default branch | The git ref to dispatch against |
-| `--backend <name>` | the workflow's default | Route Claude Code at a specific model backend for this dispatch (e.g. `anthropic`, `glm`). See [Backend routing](#backend-routing) below |
-| `--claude-timeout <seconds>` | the action's 900s default | Wall-clock ceiling for the Claude Code implementation step on this dispatch. Raise for very large monorepos |
+| `--provider <name>` | the workflow's default (`anthropic`) | Route Claude Code at a specific model provider for this dispatch (`anthropic` or `zai`). See [Provider + model routing](#provider--model-routing) below |
+| `--model <name>` | (provider default) | Specific model to request from the provider (e.g. `claude-opus-4-7`, `glm-5.2`, `glm-4.6`). Forwarded as `ANTHROPIC_MODEL` env. Empty = the provider picks |
+| `--claude-timeout <seconds>` | the action's 900s default | Wall-clock ceiling for the Claude Code agent calls on this dispatch (preflight + implementation share the budget). Raise for very large monorepos |
 
 
-## Backend routing
+## Provider + model routing
 
-`--backend` routes a single dispatch at an alternate Anthropic-Messages-compatible backend (currently `glm` for [z.ai](https://z.ai)'s GLM Coding Plan, with Bedrock / Vertex / on-prem coming as the table grows). `setup-local`-generated workflows declare `backend` as a workflow_dispatch input and include a `Configure backend auth` step that picks the right auth env var per dispatch — so the only setup besides `outrider setup-local` is putting the alternate backend's API key in the repo's secrets:
+`--provider` selects the API endpoint (the company); `--model` picks the specific model from that provider. `setup-local`-generated workflows declare both as workflow_dispatch inputs and include a `Configure provider auth` step that picks the right auth env var + sets `ANTHROPIC_MODEL` per dispatch.
+
+The only setup besides `outrider setup-local` is putting the alternate provider's API key in the repo's secrets:
 
 ```bash
 # 1. Drop the z.ai key into the repo's secrets (safely).
-remyxai outrider set-backend-secret \
-  --repo owner/name --backend glm --key-from ~/zai-key
+remyxai outrider set-provider-secret \
+  --repo owner/name --provider zai --key-from ~/zai-key
 
-# 2. Route this run at z.ai's GLM endpoint; scheduled cron runs
-#    continue to use the workflow's default (Anthropic).
-remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2 --backend glm
+# 2. Route this run at z.ai's GLM-5.2; scheduled cron runs continue
+#    to use the workflow's default (Anthropic).
+remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2 \
+  --provider zai --model glm-5.2
+
+# Or compare against an older z.ai model on the same paper/repo:
+remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2 \
+  --provider zai --model glm-4.6
+
+# Pin to a specific Anthropic model (e.g. for an A/B against Sonnet):
+remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2 \
+  --provider anthropic --model claude-sonnet-4-6
 ```
 
-When the flag is omitted, the workflow's own default applies — so customers who only ever route at Anthropic don't need to think about it. See the action's [`docs/backends.md`](https://github.com/remyxai/outrider/blob/main/docs/backends.md) for the underlying auth-header matrix and the per-backend rate table that drives cost telemetry.
+When `--provider` is omitted, the workflow's own default applies — so customers who only ever route at Anthropic don't need to think about it. When `--model` is omitted, the provider picks its current default model. See the action's [`docs/backends.md`](https://github.com/remyxai/outrider/blob/main/docs/backends.md) for the underlying auth-header matrix and the per-provider rate table that drives cost telemetry.
 
 
-## Setting backend secrets safely: `set-backend-secret`
+## Setting provider secrets safely: `set-provider-secret`
 
-`gh secret set` has a well-known footgun: with `--body -` and disconnected stdin, it stores the literal `-` character as the secret value and the workflow then sees `Authorization: Bearer -` on every call (HTTP 401, hours of debugging). `outrider set-backend-secret` wraps it with the pitfalls handled:
+`gh secret set` has a well-known footgun: with `--body -` and disconnected stdin, it stores the literal `-` character as the secret value and the workflow then sees `Authorization: Bearer -` on every call (HTTP 401, hours of debugging). `outrider set-provider-secret` wraps it with the pitfalls handled:
 
 ```bash
-remyxai outrider set-backend-secret \
-  --repo owner/name --backend glm --key-from ~/zai-key
+remyxai outrider set-provider-secret \
+  --repo owner/name --provider zai --key-from ~/zai-key
 ```
 
 What it does:
@@ -112,14 +124,14 @@ What it does:
 - Warns on suspiciously-short keys (`< 16` chars)
 - Pipes the value via stdin to `gh secret set` — the secret never appears in process argv or shell logs
 
-Maps `--backend` to the secret name the workflow's `Configure backend auth` step reads:
+Maps `--provider` to the secret name the workflow's `Configure provider auth` step reads:
 
-| `--backend` | Secret name set |
+| `--provider` | Secret name set |
 |---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` |
-| `glm` | `ZAI_API_KEY` |
+| `zai` | `ZAI_API_KEY` |
 
-Future backends extend this mapping (Bedrock → `AWS_BEARER_TOKEN_BEDROCK`, etc.) as the rate table grows.
+Future providers extend this mapping (Bedrock → `AWS_BEARER_TOKEN_BEDROCK`, etc.) as the rate table grows.
 
 
 ## Long-running repos: `--claude-timeout`
