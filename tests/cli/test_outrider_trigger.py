@@ -1,4 +1,4 @@
-"""Tests for `remyxai outrider trigger` — REMYX-148.
+"""Tests for `remyxai outrider trigger`.
 
 Covers:
 - CLI wiring (option flags, mutex enforcement, click usage errors)
@@ -249,3 +249,219 @@ def test_cli_outrider_trigger_mutex_via_click():
     ])
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output.lower()
+
+
+# ─── --claude-timeout forwarding ──────────────────────────────────────────
+
+
+def test_trigger_forwards_claude_timeout_when_set(monkeypatch, capsys):
+    """`--claude-timeout 1800` flows to the workflow_dispatch as a string."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda repo, sleep=None: None)
+
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", pin_method="X", pin_arxiv=None,
+        interest_id=None, ref=None, claude_timeout=1800,
+    )
+    # Stringified at the dispatch boundary because workflow_dispatch
+    # input values are strings on the wire.
+    assert captured["inputs"]["claude-timeout"] == "1800"
+    out = capsys.readouterr().out
+    assert "claude-timeout: 1800s" in out
+
+
+def test_trigger_omits_claude_timeout_when_unset(monkeypatch):
+    """No flag → empty string → `_gh_dispatch_outrider` drops it →
+    the action's own default (900s) applies."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda repo, sleep=None: None)
+
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", pin_method="X", pin_arxiv=None,
+        interest_id=None, ref=None,
+    )
+    assert captured["inputs"]["claude-timeout"] == ""
+
+
+def test_trigger_rejects_claude_timeout_below_minimum():
+    """Catch obviously-wrong values at the CLI boundary rather than
+    waiting for the action to fail on a too-tight ceiling."""
+    with pytest.raises(click.UsageError, match="at least 60 seconds"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", pin_method="X", pin_arxiv=None,
+            interest_id=None, ref=None, claude_timeout=30,
+        )
+
+
+def test_cli_claude_timeout_flag_accepted_and_dispatched(monkeypatch):
+    """End-to-end through click: --claude-timeout reaches the dispatch."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger",
+        "--repo", "owner/name",
+        "--pin-method", "2410.20305v2",
+        "--claude-timeout", "2700",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["claude-timeout"] == "2700"
+    assert "claude-timeout: 2700s" in result.output
+
+
+def test_cli_claude_timeout_must_be_integer():
+    """Click's `type=int` rejects non-integer values at the boundary."""
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger",
+        "--repo", "owner/name",
+        "--pin-method", "X",
+        "--claude-timeout", "nope",
+    ])
+    assert result.exit_code != 0
+    assert "not a valid integer" in result.output.lower()
+
+
+# ─── --backend forwarding ─────────────────────────────────────────────────
+
+
+def test_trigger_forwards_backend_when_set(monkeypatch, capsys):
+    """`--backend glm` flows to the workflow_dispatch as a string input."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda repo, sleep=None: None)
+
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", pin_method="X", pin_arxiv=None,
+        interest_id=None, ref=None, backend="glm",
+    )
+    assert captured["inputs"]["backend"] == "glm"
+    out = capsys.readouterr().out
+    assert "backend:        glm" in out
+
+
+def test_trigger_omits_backend_when_unset(monkeypatch):
+    """No flag → empty string → `_gh_dispatch_outrider` drops it →
+    the workflow's own default backend applies."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda repo, sleep=None: None)
+
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", pin_method="X", pin_arxiv=None,
+        interest_id=None, ref=None,
+    )
+    assert captured["inputs"]["backend"] == ""
+
+
+def test_cli_backend_flag_dispatched(monkeypatch):
+    """End-to-end through click: --backend reaches the dispatch."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger",
+        "--repo", "owner/name",
+        "--pin-method", "2410.20305v2",
+        "--backend", "anthropic",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["backend"] == "anthropic"
+    assert "backend:        anthropic" in result.output
+
+
+def test_cli_backend_combines_with_claude_timeout(monkeypatch):
+    """Both new flags coexist; their inputs travel together to the
+    workflow_dispatch payload."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger",
+        "--repo", "owner/name",
+        "--pin-method", "2410.20305v2",
+        "--backend", "glm",
+        "--claude-timeout", "1200",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["backend"] == "glm"
+    assert captured["inputs"]["claude-timeout"] == "1200"
+    assert captured["inputs"]["pin-method"] == "2410.20305v2"

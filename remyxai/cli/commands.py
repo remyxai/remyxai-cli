@@ -792,7 +792,24 @@ def outrider_setup_local(
 @click.option("--ref", "ref", default=None,
               help="Git ref to dispatch on. Defaults to the repo's default "
                    "branch.")
-def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref):
+@click.option("--claude-timeout", "claude_timeout", type=int, default=None,
+              help=(
+                  "Wall-clock seconds for the Claude Code implementation "
+                  "step on this dispatch. Default (unset) lets the "
+                  "action's own default apply (900s). Raise for very "
+                  "large monorepos where the agent runs out of time "
+                  "(especially when routing at slower non-Anthropic "
+                  "backends)."
+              ))
+@click.option("--backend", "backend", default=None,
+              help=(
+                  "Route Claude Code at a specific model backend for "
+                  "this dispatch (e.g. 'anthropic', 'glm'). Requires the "
+                  "target workflow to declare a `backend` workflow_"
+                  "dispatch input; if unset, the workflow's own default "
+                  "applies."
+              ))
+def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeout, backend):
     """
     Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -811,6 +828,10 @@ def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref):
       # no longer in the candidate pool)
       remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2
 
+      # Bump the implementation timeout for a very large monorepo
+      remyxai outrider trigger --repo owner/name \\
+        --pin-method 2410.20305v2 --claude-timeout 1800
+
       # Plain trigger — let the normal selection pass run
       remyxai outrider trigger --repo owner/name
     """
@@ -820,6 +841,8 @@ def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref):
         pin_arxiv=pin_arxiv,
         interest_id=interest_id,
         ref=ref,
+        claude_timeout=claude_timeout,
+        backend=backend,
     )
 
 

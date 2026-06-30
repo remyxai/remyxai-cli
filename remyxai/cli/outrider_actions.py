@@ -564,7 +564,8 @@ def _gh_latest_run_url(repo, sleep=time.sleep):
 
 
 def handle_outrider_trigger(
-    repo, pin_method, pin_arxiv, interest_id, ref,
+    repo, pin_method, pin_arxiv, interest_id, ref, claude_timeout=None,
+    backend=None,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -573,11 +574,21 @@ def handle_outrider_trigger(
     engine round-trip, no Remyx App requirement. The repo must already
     have an Outrider workflow installed (set up via `remyxai outrider init`
     or `setup-local`).
+
+    ``claude_timeout`` (seconds) overrides the action's default 900s
+    implementation-call ceiling on a per-dispatch basis. Useful for very
+    large monorepos where the default trips before the agent completes
+    (especially when routing at slower non-Anthropic backends).
     """
     # Inputs validation
     if pin_method and pin_arxiv:
         raise click.UsageError(
             "--pin-method and --pin-arxiv are mutually exclusive."
+        )
+    if claude_timeout is not None and claude_timeout < 60:
+        raise click.UsageError(
+            "--claude-timeout must be at least 60 seconds (a tighter value "
+            "trips before the agent can finish even a small task)."
         )
 
     # Repo resolution
@@ -614,15 +625,29 @@ def handle_outrider_trigger(
         "pin-method": pin_method or "",
         "pin-arxiv": pin_arxiv or "",
         "interest-id": interest_id or "",
+        # Forward as a string — workflow_dispatch input values are
+        # always strings on the wire. The action's INPUT_CLAUDE_TIMEOUT
+        # parser handles the int conversion (and validates it).
+        "claude-timeout": str(claude_timeout) if claude_timeout else "",
+        # The target workflow must declare `backend` as a workflow_
+        # dispatch input for this to take effect; CLI-generated
+        # workflows on currently-shipped templates don't, but
+        # backend-switching templates (hand-edited or future template
+        # versions) do.
+        "backend": backend or "",
     }
 
     click.echo(f"Dispatching Outrider on {resolved_repo} (ref={branch})…")
+    if backend:
+        click.echo(f"  backend:        {backend}")
     if pin_method:
-        click.echo(f"  pin-method: {pin_method!r}")
+        click.echo(f"  pin-method:     {pin_method!r}")
     if pin_arxiv:
-        click.echo(f"  pin-arxiv:  {pin_arxiv!r}")
+        click.echo(f"  pin-arxiv:      {pin_arxiv!r}")
     if interest_id:
-        click.echo(f"  interest:   {interest_id}")
+        click.echo(f"  interest:       {interest_id}")
+    if claude_timeout:
+        click.echo(f"  claude-timeout: {claude_timeout}s")
 
     ok, stderr = _gh_dispatch_outrider(resolved_repo, branch, inputs)
     if not ok:
