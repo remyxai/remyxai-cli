@@ -6,7 +6,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.4.3",
+    version="0.4.4",
     packages=find_packages(include=["remyxai", "remyxai.*"]),
     install_requires=[
         "click",

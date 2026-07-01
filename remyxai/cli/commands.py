@@ -694,6 +694,14 @@ def outrider_init(
                   "trigger` only. Re-enable later by uncommenting the "
                   "schedule block."
               ))
+@click.option("--no-cocoindex", "no_cocoindex", is_flag=True, default=False,
+              help=(
+                  "Omit the cocoindex-code install + ENVIRONMENTS.md write "
+                  "steps from the workflow. Default is to include them — "
+                  "AST-based code search grounds the selection agent's "
+                  "call-site claims on real paths. See outrider's "
+                  "docs/environments.md for the rationale."
+              ))
 @click.option("--bulk-repos", "bulk_repos", type=click.Path(), default=None,
               help=(
                   "Path to a TSV mapping repos to ResearchInterest UUIDs "
@@ -709,7 +717,7 @@ def outrider_init(
               help="Skip the confirmation prompt (default is opt-in).")
 def outrider_setup_local(
     repo, interest_id, auto_interest, mode, anthropic_key,
-    no_cron, bulk_repos, pace_s, dry_run, skip_confirm,
+    no_cron, no_cocoindex, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider WITHOUT the Remyx GitHub App.
@@ -753,6 +761,7 @@ def outrider_setup_local(
                 skip_confirm=skip_confirm,
                 dry_run=dry_run,
                 no_cron=no_cron,
+                no_cocoindex=no_cocoindex,
             ),
             pace_s=pace_s,
         )
@@ -766,6 +775,7 @@ def outrider_setup_local(
         skip_confirm=skip_confirm,
         dry_run=dry_run,
         no_cron=no_cron,
+        no_cocoindex=no_cocoindex,
     )
 
 
