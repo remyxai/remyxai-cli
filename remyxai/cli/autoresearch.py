@@ -317,11 +317,21 @@ def handle_autoresearch(
     branch = _gh_default_branch(repo) or "main"
     starting_cycle = len(trace) + 1
 
+    CONSECUTIVE_SKIP_LIMIT = 2  # honor the LLM's "pool exhausted" signal
     for i in range(cycles):
         cycle_n = starting_cycle + i
         total_cost = sum(t.get("cost_estimate_usd", 0.0) for t in trace)
         if total_cost >= budget_usd:
             click.echo(f"Budget ${budget_usd:.2f} reached (${total_cost:.2f} spent). Stopping.")
+            break
+        # Early-terminate when the LLM has signaled pool-exhausted twice in a row.
+        # SKIPs are cheap ($0.02 each) but pointless once the LLM has read the
+        # trace and confirmed no candidate fits — the ranker's picks aren't
+        # changing between cycles within a batch run.
+        recent_skips = [t.get("decision") == "SKIP" for t in trace[-CONSECUTIVE_SKIP_LIMIT:]]
+        if len(recent_skips) >= CONSECUTIVE_SKIP_LIMIT and all(recent_skips):
+            click.echo(f"{CONSECUTIVE_SKIP_LIMIT} consecutive SKIPs — candidate pool exhausted. Stopping.")
+            click.echo("  → Consider refining the interest context, waiting for new papers, or switching target.")
             break
 
         click.echo(f"\n─── Cycle {cycle_n} ───")
@@ -336,7 +346,7 @@ def handle_autoresearch(
         candidates = _extract_candidates(recs)
         # Filter prior-art (deterministic) — drop candidates whose arxiv_id is
         # cited in-tree OR whose id already appeared in trace (dedup).
-        seen_ids = {t.get("arxiv_id", "").split("v")[0] for t in trace}
+        seen_ids = {(t.get("arxiv_id") or "").split("v")[0] for t in trace if t.get("arxiv_id")}
         candidates = [
             c for c in candidates
             if c["arxiv_id"] and c["arxiv_id"].split("v")[0] not in citations
