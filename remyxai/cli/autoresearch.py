@@ -448,11 +448,23 @@ def handle_autoresearch(
         entry["artifact_url"] = artifact_url
 
         if not artifact_url:
-            click.echo("  No artifact URL — run terminated without opening PR/Issue")
-            entry["decision"] = "REJECT"
-            entry["rationale"] = "hypothesis: dispatched — observed: no artifact opened — conclusion: reject (no evidence to evaluate)"
-            entry["failure_mode"] = "no-artifact"
-            entry["cost_estimate_usd"] += 5.0  # rough dispatch estimate
+            # Distinguish workflow-level failures (claude_failed, timeouts,
+            # provider API errors) from clean-run-no-artifact bailouts
+            # (skipped_by_selection_verification etc). The former shouldn't
+            # count against the loop's REJECT rate — it's an infra glitch,
+            # not a considered rejection of the paper.
+            if terminal_payload.get("conclusion") == "failure" or signals.get("status") == "claude_failed":
+                click.echo("  Workflow failed (claude_failed / provider glitch) — INFRA_FAIL, not a paper-fit signal")
+                entry["decision"] = "INFRA_FAIL"
+                entry["rationale"] = "hypothesis: dispatched — observed: workflow-level failure (provider glitch, quota, or timeout) — conclusion: infra_fail (retry-eligible, not a REJECT)"
+                entry["failure_mode"] = "provider-side-failure"
+                entry["cost_estimate_usd"] += 0.5  # partial dispatch, not full
+            else:
+                click.echo("  No artifact URL — run terminated without opening PR/Issue")
+                entry["decision"] = "REJECT"
+                entry["rationale"] = "hypothesis: dispatched — observed: no artifact opened — conclusion: reject (no evidence to evaluate)"
+                entry["failure_mode"] = "no-artifact"
+                entry["cost_estimate_usd"] += 5.0  # rough dispatch estimate
             _append_trace(trace_path, entry)
             trace.append(entry)
             continue

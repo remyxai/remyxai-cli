@@ -28,7 +28,7 @@ def render_report(trace: List[Dict[str, Any]], target_repo: str, budget_usd: flo
     lines.append("")
     lines.append("## Decisions")
     lines.append("")
-    for k in ("MERGE", "ITERATE", "LEAD", "REJECT", "SKIP"):
+    for k in ("MERGE", "ITERATE", "LEAD", "REJECT", "SKIP", "INFRA_FAIL"):
         lines.append(f"- **{k}**: {decisions.get(k, 0)}")
     lines.append("")
 
