@@ -1,14 +1,20 @@
 ---
 type: howto
 description: Discover a relevant paper or method, then dispatch a targeted Outrider run that implements it.
-tags: [outrider, cli, pin-method, pin-arxiv, workflow_dispatch]
+tags: [outrider, cli, search-method, pin-arxiv, workflow_dispatch]
 ---
 
 # Method-targeted Outrider runs
 
 Once [Outrider](https://github.com/remyxai/outrider) is installed on a repo, you can dispatch a one-shot run targeting a specific paper or method — useful for kicking off an ad-hoc PR/Issue without waiting for the next scheduled run.
 
-The flow is two steps: **discover** an arxiv id you want implemented, then **trigger** the action with that id pinned.
+Three modes of specificity, in ascending order of override:
+
+1. **Default (no pin)** — Remyx ranks candidates from the interest-scoped pool + Outrider's audit augments via agentic refine-queries; Claude Code picks the best implementation from the ranked pool.
+2. **`--search-method`** — overrides the ranked pool with an engine search on your query; implements the top hit.
+3. **`--pin-arxiv`** — implements the exact arxiv paper; bypasses ranking entirely.
+
+The flow is two steps: **discover** what you want implemented, then **trigger** the action.
 
 
 ## 1. Discover
@@ -19,14 +25,14 @@ The flow is two steps: **discover** an arxiv id you want implemented, then **tri
 remyxai papers list --interest <uuid> --period week -n 10
 ```
 
-Lists the engine's top recommendations for a Research Interest over the lookback window. Each entry shows the title, arxiv URL, and a relevance score. Note the arxiv id (e.g. `2410.20305v2`) of the candidate you want to implement.
+Lists the engine's top recommendations for a Research Interest over the lookback window. Each entry shows the title, arxiv URL, and a relevance score. Note the arxiv id (e.g. `2402.02347v3`) of the candidate you want to implement.
 
 `remyxai papers digest` groups recommendations by interest if you want a cross-cutting view.
 
 ### From a free-text search of the catalog
 
 ```bash
-remyxai search query "knowledge distillation" -n 5
+remyxai search query "riemannian preconditioning LoRA" -n 5
 ```
 
 Searches the engine's research-asset catalog for matches against a method or topic. Useful when you have a method in mind but don't yet know the canonical paper.
@@ -36,20 +42,36 @@ Searches the engine's research-asset catalog for matches against a method or top
 
 ## 2. Trigger
 
-```bash
-# Pin to a specific paper by arxiv id
-remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2
+### `--pin-arxiv` — exact paper (recommended for known arxiv ids)
 
-# Or describe the method — the action resolves it to the top arxiv hit
-remyxai outrider trigger --repo owner/name --pin-method "knowledge distillation"
+```bash
+remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3
 ```
 
-`--pin-method` accepts either a literal arxiv id (`NNNN.NNNNN[vN]`) or a free-text method query.
+Implements exactly this paper. Bypasses the ranker's pool entirely — Remyx fetches the paper directly from its asset catalog and forwards it to Claude Code for implementation. Works even if the paper isn't in the repo's interest-scoped candidate pool.
 
-- When the input matches the arxiv-id shape, the action uses **direct asset lookup** — the paper doesn't need to already be in the repo's candidate pool.
-- When the input is free text, the action runs the engine's search and pins to the top hit.
+Use for:
+- Reproducible re-runs (same paper, same repo, deterministic paper input)
+- Retries after a timeout or backend failure
+- Cases where you've already identified the paper via `remyxai search info` or elsewhere
 
-In both cases the LLM selection pass is bypassed and the resolved paper goes straight to the implementation phase (Phase A audit → Phase B convention pass → Phase C test gate).
+### `--search-method` — free-text method query
+
+```bash
+remyxai outrider trigger --repo owner/name \
+  --search-method "riemannian preconditioning LoRA optimizer"
+```
+
+Runs an engine search over the paper catalog and implements the top hit. Use for exploratory dispatches when you know the method family but haven't pinned down a specific paper.
+
+The top-hit semantic means: **whichever arxiv paper the engine returns first for your query gets implemented**. Not deterministic across search index updates. If reproducibility matters, use `--pin-arxiv` with the resolved arxiv id instead.
+
+The two flags are mutually exclusive — setting both is a usage error.
+
+### Both paths bypass selection
+
+In both `--pin-arxiv` and `--search-method` cases, the LLM selection pass is skipped and the resolved paper goes straight to preflight → implementation → refinement chain (fidelity audit → convention pass → test gate).
+
 
 ### Pre-flight
 
@@ -60,11 +82,6 @@ Outrider is not installed on owner/name. Install it first:
   remyxai outrider init --repo owner/name
 ```
 
-### --pin-arxiv (legacy)
-
-`--pin-arxiv` is the older form: it pins to an arxiv id but requires the paper to already be present in the repo's candidate pool. `--pin-method` is a superset (it works on arxiv ids outside the pool, via direct asset lookup), so prefer it for new uses.
-
-The two flags are mutually exclusive — setting both is a usage error.
 
 ### Other options
 
@@ -91,15 +108,15 @@ remyxai outrider set-provider-secret \
 
 # 2. Route this run at z.ai's GLM-5.2; scheduled cron runs continue
 #    to use the workflow's default (Anthropic).
-remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2 \
+remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
   --provider zai --model glm-5.2
 
 # Or compare against an older z.ai model on the same paper/repo:
-remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2 \
+remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
   --provider zai --model glm-4.6
 
 # Pin to a specific Anthropic model (e.g. for an A/B against Sonnet):
-remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2 \
+remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
   --provider anthropic --model claude-sonnet-4-6
 ```
 
@@ -141,8 +158,8 @@ The action's `claude-timeout` input ceilings the wall-clock budget on the implem
 ```bash
 # Bump to 1200s for a sprawling monorepo on a slower backend.
 remyxai outrider trigger \
-  --repo owner/name --pin-method 2410.20305v2 \
-  --backend glm --claude-timeout 1200
+  --repo owner/name --pin-arxiv 2402.02347v3 \
+  --provider zai --claude-timeout 1200
 ```
 
 The CLI rejects values below 60 seconds at the command boundary. The action itself parses the input as an integer; non-integer values fail fast at the workflow's `INPUT_CLAUDE_TIMEOUT` parser.
