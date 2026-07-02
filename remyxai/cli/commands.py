@@ -785,18 +785,22 @@ def outrider_setup_local(
                   "Target repo as owner/name or a GitHub URL. Defaults to "
                   "detecting from the current directory's git remote."
               ))
-@click.option("--pin-method", "pin_method", default=None,
+@click.option("--search-method", "search_method", default=None,
               help=(
-                  "Method/technique query (e.g. \"knowledge distillation\") "
-                  "or a literal arxiv_id. The action's selection pass is "
-                  "bypassed and the resolved paper is implemented directly. "
-                  "Mutually exclusive with --pin-arxiv."
+                  "Free-text method/technique query (e.g. \"riemannian "
+                  "preconditioning LoRA optimizer\"). Runs an engine "
+                  "search and implements the top hit. Use for "
+                  "exploratory dispatches when you know the method "
+                  "family but not the specific arxiv id. For exact "
+                  "papers, use --pin-arxiv."
               ))
 @click.option("--pin-arxiv", "pin_arxiv", default=None,
               help=(
-                  "arxiv_id of a paper in the repo's candidate pool to "
-                  "implement directly. Use --pin-method for arxiv_ids not "
-                  "in the pool (it does a direct asset lookup)."
+                  "Exact arxiv_id (e.g. 2402.02347v3). Bypasses selection "
+                  "and implements this specific paper. Use for reproducible "
+                  "re-runs. Falls back to Remyx's asset lookup if the id "
+                  "isn't in the ranker's pool, so any published arxiv paper "
+                  "works — not just those the interest surfaces."
               ))
 @click.option("--interest", "-i", "interest_id", default=None,
               help="Override the ResearchInterest UUID for this run.")
@@ -827,40 +831,49 @@ def outrider_setup_local(
                   "which sets ANTHROPIC_MODEL in the action's env. "
                   "Empty = provider picks its default."
               ))
-def outrider_trigger(repo, pin_method, pin_arxiv, interest_id, ref, claude_timeout, provider, model):
+def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_timeout, provider, model):
     """
     Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
-    Useful for kicking off ad-hoc method-targeted PRs without waiting for
-    the next scheduled run. The repo must already have an Outrider workflow
-    installed (see `remyxai outrider init` / `setup-local`). Authenticates
-    via your local `gh` CLI — no Remyx engine round-trip.
+    Three modes of specificity, in ascending order of override:
+
+    \b
+    - default (no pin): Remyx ranks candidates from the interest-scoped
+      pool + Outrider's audit augments via agentic refine-queries;
+      Claude Code picks the best implementation from the ranked pool.
+    - --search-method: overrides the ranked pool with an engine search
+      on the user-specified query; the top hit gets implemented.
+    - --pin-arxiv: exact arxiv paper; bypasses the pool entirely and
+      implements THIS specific paper against the target branch.
+
+    The repo must already have an Outrider workflow installed (see
+    `remyxai outrider init` / `setup-local`). Authenticates via your
+    local `gh` CLI — no Remyx engine round-trip.
 
     Examples:
 
-      # Implement a specific method on a target repo
-      remyxai outrider trigger --repo owner/name \\
-        --pin-method "knowledge distillation"
+      # Implement a specific paper by arxiv id (exact, reproducible)
+      remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3
 
-      # Re-run a previously surfaced paper by arxiv_id (works even if it's
-      # no longer in the candidate pool)
-      remyxai outrider trigger --repo owner/name --pin-method 2410.20305v2
+      # Exploratory: search for a method-family and implement the top hit
+      remyxai outrider trigger --repo owner/name \\
+        --search-method "riemannian preconditioning LoRA optimizer"
 
       # Route at z.ai's GLM-5.2 for this dispatch (Anthropic is the
       # workflow's default; this overrides for one run)
       remyxai outrider trigger --repo owner/name \\
-        --pin-method 2410.20305v2 --provider zai --model glm-5.2
+        --pin-arxiv 2402.02347v3 --provider zai --model glm-5.2
 
       # Bump the implementation timeout for a very large monorepo
       remyxai outrider trigger --repo owner/name \\
-        --pin-method 2410.20305v2 --claude-timeout 1800
+        --pin-arxiv 2402.02347v3 --claude-timeout 1800
 
       # Plain trigger — let the normal selection pass run
       remyxai outrider trigger --repo owner/name
     """
     handle_outrider_trigger(
         repo=repo,
-        pin_method=pin_method,
+        search_method=search_method,
         pin_arxiv=pin_arxiv,
         interest_id=interest_id,
         ref=ref,

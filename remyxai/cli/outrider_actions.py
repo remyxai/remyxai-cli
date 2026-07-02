@@ -565,7 +565,7 @@ def _gh_latest_run_url(repo, sleep=time.sleep):
 
 
 def handle_outrider_trigger(
-    repo, pin_method, pin_arxiv, interest_id, ref, claude_timeout=None,
+    repo, search_method, pin_arxiv, interest_id, ref, claude_timeout=None,
     provider=None, model=None,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
@@ -582,9 +582,9 @@ def handle_outrider_trigger(
     (especially when routing at slower non-Anthropic backends).
     """
     # Inputs validation
-    if pin_method and pin_arxiv:
+    if search_method and pin_arxiv:
         raise click.UsageError(
-            "--pin-method and --pin-arxiv are mutually exclusive."
+            "--search-method and --pin-arxiv are mutually exclusive."
         )
     if claude_timeout is not None and claude_timeout < 60:
         raise click.UsageError(
@@ -623,7 +623,7 @@ def handle_outrider_trigger(
         )
 
     inputs = {
-        "pin-method": pin_method or "",
+        "search-method": search_method or "",
         "pin-arxiv": pin_arxiv or "",
         "interest-id": interest_id or "",
         # Forward as a string — workflow_dispatch input values are
@@ -643,8 +643,8 @@ def handle_outrider_trigger(
         click.echo(f"  provider:       {provider}")
     if model:
         click.echo(f"  model:          {model}")
-    if pin_method:
-        click.echo(f"  pin-method:     {pin_method!r}")
+    if search_method:
+        click.echo(f"  search-method:  {search_method!r}")
     if pin_arxiv:
         click.echo(f"  pin-arxiv:      {pin_arxiv!r}")
     if interest_id:
@@ -761,5 +761,5 @@ def handle_set_provider_secret(repo, provider, key_from):
         click.echo(
             "  Next: `remyxai outrider trigger --repo "
             f"{resolved_repo} --provider zai --model glm-5.2 "
-            f"--pin-method <arxiv>` to test."
+            f"--pin-arxiv <arxiv-id>` to test."
         )

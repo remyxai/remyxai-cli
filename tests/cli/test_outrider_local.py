@@ -92,7 +92,7 @@ def test_render_declares_model_input_and_configure_step_sets_env():
 
 
 def test_render_declares_workflow_dispatch_inputs():
-    """The generated workflow exposes pin-method / pin-arxiv /
+    """The generated workflow exposes search-method / pin-arxiv /
     claude-timeout as workflow_dispatch inputs so `remyxai outrider
     trigger` and manual `gh workflow run -f ...` can forward them
     without the workflow rejecting them as 'not a permitted key'."""
@@ -101,7 +101,7 @@ def test_render_declares_workflow_dispatch_inputs():
     assert "workflow_dispatch:" in wf
     assert "    inputs:" in wf
     # Each declared input is present.
-    for name in ("pin-method:", "pin-arxiv:", "claude-timeout:"):
+    for name in ("search-method:", "pin-arxiv:", "claude-timeout:"):
         assert name in wf, f"missing input declaration: {name}"
     # claude-timeout's default matches the action's documented 900s.
     assert "default: '900'" in wf
@@ -111,7 +111,7 @@ def test_render_forwards_workflow_dispatch_inputs_to_action():
     """Each declared workflow_dispatch input is forwarded into the
     action's `with:` block via ${{ inputs.<name> }}."""
     wf = outrider_local._render_local_workflow("uuid")
-    for name in ("pin-method", "pin-arxiv", "claude-timeout"):
+    for name in ("search-method", "pin-arxiv", "claude-timeout"):
         assert f"{name}: ${{{{ inputs.{name} }}}}" in wf, (
             f"missing forwarding for {name}"
         )

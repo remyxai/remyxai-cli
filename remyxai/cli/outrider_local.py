@@ -293,12 +293,12 @@ on:
         description: 'Specific model name to request from the provider (e.g. claude-opus-4-7, glm-5.2, glm-4.6). Empty = let the provider pick its default.'
         required: false
         default: ''
-      pin-method:
-        description: 'Optional arxiv_id or method query to implement directly (bypasses selection).'
+      search-method:
+        description: 'Optional free-text method query (e.g. "riemannian preconditioning LoRA"). Runs an engine search and implements the top hit. Use for exploratory dispatches.'
         required: false
         default: ''
       pin-arxiv:
-        description: 'Optional arxiv_id from this repo''s candidate pool to implement directly.'
+        description: 'Optional exact arxiv_id (e.g. 2402.02347v3). Bypasses selection and implements this specific paper. Use for reproducible re-runs.'
         required: false
         default: ''
       claude-timeout:
@@ -353,7 +353,7 @@ jobs:
           # can pin a paper, extend the implementation timeout, or
           # route at an alternate provider per dispatch. Empty on
           # scheduled runs — the action uses its own defaults.
-          pin-method: ${{{{ inputs.pin-method }}}}
+          search-method: ${{{{ inputs.search-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
           claude-timeout: ${{{{ inputs.claude-timeout }}}}
           # Maps provider name → base URL. Adding more providers here

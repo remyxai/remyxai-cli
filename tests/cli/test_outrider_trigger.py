@@ -4,7 +4,7 @@ Covers:
 - CLI wiring (option flags, mutex enforcement, click usage errors)
 - Repo resolution (explicit, auto-detect from git, missing)
 - Default ref resolution (from gh API) + explicit ref override
-- gh-dispatch invocation (correct path, ref, pin-method / pin-arxiv inputs)
+- gh-dispatch invocation (correct path, ref, search-method / pin-arxiv inputs)
 - Failure surfacing (404 not-installed, 403 missing-scope)
 - Run-URL best-effort lookup
 
@@ -24,7 +24,7 @@ from remyxai.cli.commands import cli
 # ─── _gh_dispatch_outrider ────────────────────────────────────────────────
 
 
-def test_gh_dispatch_includes_pin_method_input():
+def test_gh_dispatch_includes_search_method_input():
     """Non-empty inputs flow through to `gh workflow run -f <key>=<val>`."""
     captured = {}
 
@@ -35,7 +35,7 @@ def test_gh_dispatch_includes_pin_method_input():
     with patch("subprocess.run", side_effect=fake_run):
         ok, err = outrider_actions._gh_dispatch_outrider(
             "owner/name", "main",
-            {"pin-method": "knowledge distillation", "pin-arxiv": "",
+            {"search-method": "knowledge distillation", "pin-arxiv": "",
              "interest-id": ""},
         )
     assert ok is True
@@ -46,7 +46,7 @@ def test_gh_dispatch_includes_pin_method_input():
     assert "outrider.yml" in args
     assert "--repo" in args and "owner/name" in args
     assert "--ref" in args and "main" in args
-    assert "pin-method=knowledge distillation" in args
+    assert "search-method=knowledge distillation" in args
     # Empty inputs are dropped, not sent as empty strings.
     assert not any(a.startswith("pin-arxiv=") for a in args)
     assert not any(a.startswith("interest-id=") for a in args)
@@ -58,7 +58,7 @@ def test_gh_dispatch_surfaces_stderr_on_failure():
 
     with patch("subprocess.run", side_effect=fake_run):
         ok, err = outrider_actions._gh_dispatch_outrider(
-            "owner/name", "main", {"pin-method": "X"},
+            "owner/name", "main", {"search-method": "X"},
         )
     assert ok is False
     assert "404" in err
@@ -86,11 +86,11 @@ def test_default_branch_none_on_gh_failure():
 # ─── handle_outrider_trigger — high-level flow ────────────────────────────
 
 
-def test_trigger_mutex_pin_method_and_pin_arxiv():
+def test_trigger_mutex_search_method_and_pin_arxiv():
     with pytest.raises(click.UsageError, match="mutually exclusive"):
         outrider_actions.handle_outrider_trigger(
             repo="owner/name",
-            pin_method="X", pin_arxiv="2410.20305v2",
+            search_method="X", pin_arxiv="2410.20305v2",
             interest_id=None, ref=None,
         )
 
@@ -100,7 +100,7 @@ def test_trigger_errors_when_no_repo_and_not_in_git_checkout(monkeypatch):
                         lambda: None)
     with pytest.raises(click.UsageError, match="Could not determine target repo"):
         outrider_actions.handle_outrider_trigger(
-            repo=None, pin_method="X", pin_arxiv=None,
+            repo=None, search_method="X", pin_arxiv=None,
             interest_id=None, ref=None,
         )
 
@@ -120,7 +120,7 @@ def test_trigger_refuses_when_workflow_not_installed(monkeypatch):
 
     with pytest.raises(click.ClickException) as exc:
         outrider_actions.handle_outrider_trigger(
-            repo="owner/name", pin_method="X", pin_arxiv=None,
+            repo="owner/name", search_method="X", pin_arxiv=None,
             interest_id=None, ref=None,
         )
     msg = exc.value.message.lower()
@@ -138,13 +138,13 @@ def test_trigger_403_surfaces_scope_hint(monkeypatch):
 
     with pytest.raises(click.ClickException) as exc:
         outrider_actions.handle_outrider_trigger(
-            repo="owner/name", pin_method="X", pin_arxiv=None,
+            repo="owner/name", search_method="X", pin_arxiv=None,
             interest_id=None, ref=None,
         )
     assert "scope" in exc.value.message.lower()
 
 
-def test_trigger_happy_path_with_pin_method(monkeypatch, capsys):
+def test_trigger_happy_path_with_search_method(monkeypatch, capsys):
     captured_dispatch = {}
 
     def fake_dispatch(repo, branch, inputs):
@@ -163,13 +163,13 @@ def test_trigger_happy_path_with_pin_method(monkeypatch, capsys):
                         "https://github.com/owner/name/actions/runs/123")
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="knowledge distillation",
+        repo="owner/name", search_method="knowledge distillation",
         pin_arxiv=None, interest_id=None, ref=None,
     )
 
     assert captured_dispatch["repo"] == "owner/name"
     assert captured_dispatch["branch"] == "main"
-    assert captured_dispatch["inputs"]["pin-method"] == "knowledge distillation"
+    assert captured_dispatch["inputs"]["search-method"] == "knowledge distillation"
     assert captured_dispatch["inputs"]["pin-arxiv"] == ""
 
     out = capsys.readouterr().out
@@ -193,7 +193,7 @@ def test_trigger_uses_explicit_ref(monkeypatch):
                         lambda repo, sleep=None: None)
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="X", pin_arxiv=None,
+        repo="owner/name", search_method="X", pin_arxiv=None,
         interest_id=None, ref="release/v2",
     )
     assert seen["branch"] == "release/v2"
@@ -219,7 +219,7 @@ def test_outrider_workflow_exists_false_on_404():
 # ─── CLI integration via click runner ─────────────────────────────────────
 
 
-def test_cli_outrider_trigger_pin_method(monkeypatch):
+def test_cli_outrider_trigger_search_method(monkeypatch):
     monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
                         lambda repo: True)
     monkeypatch.setattr(outrider_actions, "_gh_default_branch",
@@ -233,11 +233,11 @@ def test_cli_outrider_trigger_pin_method(monkeypatch):
     result = runner.invoke(cli, [
         "outrider", "trigger",
         "--repo", "owner/name",
-        "--pin-method", "knowledge distillation",
+        "--search-method", "knowledge distillation",
     ])
     assert result.exit_code == 0, result.output
     assert "Dispatched" in result.output
-    assert "pin-method" in result.output
+    assert "search-method" in result.output
 
 
 def test_cli_outrider_trigger_mutex_via_click():
@@ -245,7 +245,7 @@ def test_cli_outrider_trigger_mutex_via_click():
     result = runner.invoke(cli, [
         "outrider", "trigger",
         "--repo", "owner/name",
-        "--pin-method", "X", "--pin-arxiv", "2410.20305v2",
+        "--search-method", "X", "--pin-arxiv", "2410.20305v2",
     ])
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output.lower()
@@ -271,7 +271,7 @@ def test_trigger_forwards_claude_timeout_when_set(monkeypatch, capsys):
                         lambda repo, sleep=None: None)
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="X", pin_arxiv=None,
+        repo="owner/name", search_method="X", pin_arxiv=None,
         interest_id=None, ref=None, claude_timeout=1800,
     )
     # Stringified at the dispatch boundary because workflow_dispatch
@@ -299,7 +299,7 @@ def test_trigger_omits_claude_timeout_when_unset(monkeypatch):
                         lambda repo, sleep=None: None)
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="X", pin_arxiv=None,
+        repo="owner/name", search_method="X", pin_arxiv=None,
         interest_id=None, ref=None,
     )
     assert captured["inputs"]["claude-timeout"] == ""
@@ -310,7 +310,7 @@ def test_trigger_rejects_claude_timeout_below_minimum():
     waiting for the action to fail on a too-tight ceiling."""
     with pytest.raises(click.UsageError, match="at least 60 seconds"):
         outrider_actions.handle_outrider_trigger(
-            repo="owner/name", pin_method="X", pin_arxiv=None,
+            repo="owner/name", search_method="X", pin_arxiv=None,
             interest_id=None, ref=None, claude_timeout=30,
         )
 
@@ -335,7 +335,7 @@ def test_cli_claude_timeout_flag_accepted_and_dispatched(monkeypatch):
     result = runner.invoke(cli, [
         "outrider", "trigger",
         "--repo", "owner/name",
-        "--pin-method", "2410.20305v2",
+        "--search-method", "2410.20305v2",
         "--claude-timeout", "2700",
     ])
     assert result.exit_code == 0, result.output
@@ -349,7 +349,7 @@ def test_cli_claude_timeout_must_be_integer():
     result = runner.invoke(cli, [
         "outrider", "trigger",
         "--repo", "owner/name",
-        "--pin-method", "X",
+        "--search-method", "X",
         "--claude-timeout", "nope",
     ])
     assert result.exit_code != 0
@@ -376,7 +376,7 @@ def test_trigger_forwards_provider_when_set(monkeypatch, capsys):
                         lambda repo, sleep=None: None)
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="X", pin_arxiv=None,
+        repo="owner/name", search_method="X", pin_arxiv=None,
         interest_id=None, ref=None, provider="zai",
     )
     assert captured["inputs"]["provider"] == "zai"
@@ -402,7 +402,7 @@ def test_trigger_omits_provider_when_unset(monkeypatch):
                         lambda repo, sleep=None: None)
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="X", pin_arxiv=None,
+        repo="owner/name", search_method="X", pin_arxiv=None,
         interest_id=None, ref=None,
     )
     assert captured["inputs"]["provider"] == ""
@@ -428,7 +428,7 @@ def test_cli_provider_flag_dispatched(monkeypatch):
     result = runner.invoke(cli, [
         "outrider", "trigger",
         "--repo", "owner/name",
-        "--pin-method", "2410.20305v2",
+        "--search-method", "2410.20305v2",
         "--provider", "anthropic",
     ])
     assert result.exit_code == 0, result.output
@@ -457,14 +457,14 @@ def test_cli_provider_combines_with_claude_timeout(monkeypatch):
     result = runner.invoke(cli, [
         "outrider", "trigger",
         "--repo", "owner/name",
-        "--pin-method", "2410.20305v2",
+        "--search-method", "2410.20305v2",
         "--provider", "zai",
         "--claude-timeout", "1200",
     ])
     assert result.exit_code == 0, result.output
     assert captured["inputs"]["provider"] == "zai"
     assert captured["inputs"]["claude-timeout"] == "1200"
-    assert captured["inputs"]["pin-method"] == "2410.20305v2"
+    assert captured["inputs"]["search-method"] == "2410.20305v2"
 
 
 # ─── --model forwarding ───────────────────────────────────────────────────
@@ -487,7 +487,7 @@ def test_trigger_forwards_model_when_set(monkeypatch, capsys):
                         lambda repo, sleep=None: None)
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="X", pin_arxiv=None,
+        repo="owner/name", search_method="X", pin_arxiv=None,
         interest_id=None, ref=None, provider="zai", model="glm-5.2",
     )
     assert captured["inputs"]["model"] == "glm-5.2"
@@ -513,14 +513,14 @@ def test_trigger_omits_model_when_unset(monkeypatch):
                         lambda repo, sleep=None: None)
 
     outrider_actions.handle_outrider_trigger(
-        repo="owner/name", pin_method="X", pin_arxiv=None,
+        repo="owner/name", search_method="X", pin_arxiv=None,
         interest_id=None, ref=None,
     )
     assert captured["inputs"]["model"] == ""
 
 
 def test_cli_model_combines_with_provider(monkeypatch):
-    """End-to-end through click: --provider + --model + --pin-method
+    """End-to-end through click: --provider + --model + --search-method
     all reach the dispatch payload together."""
     captured = {}
 
@@ -540,7 +540,7 @@ def test_cli_model_combines_with_provider(monkeypatch):
     result = runner.invoke(cli, [
         "outrider", "trigger",
         "--repo", "owner/name",
-        "--pin-method", "2410.20305v2",
+        "--search-method", "2410.20305v2",
         "--provider", "zai",
         "--model", "glm-4.6",
         "--claude-timeout", "1500",
