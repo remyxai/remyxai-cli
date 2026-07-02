@@ -163,3 +163,44 @@ remyxai outrider trigger \
 ```
 
 The CLI rejects values below 60 seconds at the command boundary. The action itself parses the input as an integer; non-integer values fail fast at the workflow's `INPUT_CLAUDE_TIMEOUT` parser.
+
+
+## Team-scale patterns
+
+### Bulk-install across an org's repos
+
+Install Outrider once across every active repo, each with an auto-extracted interest:
+
+```bash
+remyxai outrider init --bulk-repos repos.tsv --mode review
+```
+
+`repos.tsv` is a two-column file (`owner/name<TAB>interest-uuid-or-empty`); rows with an empty interest column trigger `--auto-interest`. See [install-paths.md](install-paths.md) for the full bulk flow.
+
+### Coordinate a specific paper across multiple frameworks
+
+Same paper, different codebases, one dispatch loop:
+
+```bash
+for repo in your-org/framework-a your-org/framework-b your-org/framework-c; do
+  remyxai outrider trigger --repo "$repo" --pin-arxiv 2402.02347v3
+done
+```
+
+Fidelity's cross-fork consistency check catches drift: if the same paper's core algorithm ends up implemented three different ways across three drafts, that's a signal about the codebase, not the paper.
+
+### Retry a run under a different provider
+
+If a run timed out under GLM (which tends to run 1.1–2.7× slower than Anthropic on the same paper), retry it under Anthropic:
+
+```bash
+# First attempt hit the wall-clock ceiling under GLM
+remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
+  --provider zai --claude-timeout 1500
+
+# Retry under Anthropic at the default timeout
+remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
+  --provider anthropic
+```
+
+`--pin-arxiv` guarantees reproducibility across retries — the second attempt implements the same paper the first one targeted, so the comparison isolates the provider/backend variable.
