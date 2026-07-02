@@ -39,29 +39,7 @@ remyxai outrider trigger --repo your-org/your-repo --pin-arxiv 2402.02347v3
 | Method-targeted runs + team-scale patterns | [docs/method-targeted-runs.md](docs/method-targeted-runs.md) |
 | Research Interests: three ways to create one | [docs/research-interests.md](docs/research-interests.md) |
 | Install paths, credentials, bulk-install | [docs/install-paths.md](docs/install-paths.md) |
-
-## Command reference
-
-Run any command with `--help` for full flag listings and examples.
-
-| Command | What it does |
-|---|---|
-| `remyxai outrider init` | Install Outrider on a repo via the Remyx App |
-| `remyxai outrider setup-local` | Install Outrider via your own `gh` (no Remyx App) |
-| `remyxai outrider trigger` | Dispatch a one-shot run (`--search-method` / `--pin-arxiv` / `--provider` / `--model` / `--claude-timeout`) |
-| `remyxai outrider set-provider-secret` | Set a per-provider API-key secret on a repo, safely |
-| `remyxai papers digest` | Recommendations grouped by Research Interest |
-| `remyxai papers list` | Recommendations flat view (filter by interest, period, source type) |
-| `remyxai papers refresh [--wait]` | Trigger a fresh ranking |
-| `remyxai interests list` | List your Research Interests |
-| `remyxai interests get <name-or-uuid>` | Show one interest |
-| `remyxai interests create` | Create an interest from free-form context |
-| `remyxai interests from-repo <github-url>` | Create an interest from a GitHub repo profile |
-| `remyxai interests from-project <name-or-uuid>` | Create an interest from a project's experiments |
-| `remyxai interests update <id>` | Edit name / context / daily count / active state |
-| `remyxai interests toggle <id>` | Flip active/inactive |
-| `remyxai search query <text>` | Search the engine's research-asset catalog |
-| `remyxai search info <arxiv-id>` | Asset details |
+| Full command reference | [docs/commands.md](docs/commands.md) |
 
 ## Development
 
