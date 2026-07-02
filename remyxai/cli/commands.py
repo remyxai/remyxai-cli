@@ -32,6 +32,7 @@ from remyxai.cli.outrider_actions import (
     handle_set_provider_secret,
 )
 from remyxai.cli.outrider_local import handle_outrider_setup_local
+from remyxai.cli.autoresearch import handle_autoresearch
 
 
 @click.group()
@@ -930,6 +931,70 @@ def outrider_set_provider_secret(repo, provider, key_from):
     for the chosen provider.
     """
     handle_set_provider_secret(repo=repo, provider=provider, key_from=key_from)
+
+
+@outrider.command("autoresearch")
+@click.option("--repo", "repo", default=None,
+              help="Target repo as owner/name. Detects from CWD if unset.")
+@click.option("--interest", "-i", "interest_id", default="auto",
+              help="Research interest UUID. 'auto' reads from the target's outrider.yml.")
+@click.option("--cycles", "cycles", type=int, default=5,
+              help="Max cycles to run (default 5).")
+@click.option("--budget", "budget_usd", type=float, default=50.0,
+              help="Hard budget cap in USD (default 50). Loop stops when reached.")
+@click.option("--provider", "provider", default="anthropic",
+              help="LLM provider for outer-loop calls + Outrider dispatches.")
+@click.option("--model", "model", default="claude-haiku-4-5-20251001",
+              help="Model for outer-loop hypothesis + decision calls. Cheap tier by default.")
+@click.option("--dry-run", "dry_run", is_flag=True, default=False,
+              help="Run hypothesis stage only — no dispatch, no cost beyond LLM calls.")
+@click.option("--no-comment", "no_comment", is_flag=True, default=False,
+              help="Skip posting the decision comment on artifacts (dry-review mode).")
+@click.option("--api-key", "api_key", default=None,
+              help="Override REMYXAI_API_KEY for engine API calls.")
+def outrider_autoresearch(repo, interest_id, cycles, budget_usd, provider, model, dry_run, no_comment, api_key):
+    """
+    Run the autoresearch loop against a target repo.
+
+    Repeatedly proposes papers from the ranker's top-N (respecting prior-art
+    and trace dedup), dispatches Outrider, reads the resulting artifact,
+    decides MERGE/ITERATE/REJECT with rationale, and appends to a per-target
+    trace at .remyx-autoresearch/trace.jsonl.
+
+    Safety-by-design:
+    - Loop never writes code to the target repo — only dispatches Outrider
+      and (optionally) posts decision comments on the resulting artifact.
+    - Merge stays human. Loop cannot MERGE PRs; ITERATE requests refinement
+      via @remyx-ai[bot] comment.
+    - Preflight verdicts are respected as hard REJECTs.
+    - Hard --budget and --cycles caps stop the loop cleanly.
+
+    Examples:
+
+    \b
+      # 5-cycle loop with default settings
+      remyxai outrider autoresearch --repo owner/name
+
+      # Cheap exploration with GLM outer loop + Anthropic dispatches
+      remyxai outrider autoresearch --repo owner/name --provider zai --model glm-5.2
+
+      # Dry-run: see what the loop would propose without spending on dispatches
+      remyxai outrider autoresearch --repo owner/name --dry-run
+
+      # Bounded run
+      remyxai outrider autoresearch --repo owner/name --cycles 3 --budget 25
+    """
+    handle_autoresearch(
+        repo=repo,
+        interest_id=interest_id,
+        cycles=cycles,
+        budget_usd=budget_usd,
+        provider=provider,
+        model=model,
+        dry_run=dry_run,
+        no_comment=no_comment,
+        api_key=api_key,
+    )
 
 
 if __name__ == "__main__":
