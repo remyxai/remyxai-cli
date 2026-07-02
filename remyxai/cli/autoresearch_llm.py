@@ -72,23 +72,26 @@ def _call_tool(
 HYPOTHESIS_SCHEMA = {
     "type": "object",
     "properties": {
-        "arxiv_id": {"type": "string", "description": "arxiv id from the candidate list (e.g. 2402.02347v3), or empty if using search-method"},
-        "dispatch_mode": {"type": "string", "enum": ["pin-arxiv", "search-method"], "description": "pin-arxiv for exact paper, search-method for method-family query"},
+        "arxiv_id": {"type": "string", "description": "arxiv id from the candidate list (e.g. 2402.02347v3), or empty if dispatch_mode is search-method or skip"},
+        "dispatch_mode": {"type": "string", "enum": ["pin-arxiv", "search-method", "skip"], "description": "pin-arxiv for exact paper, search-method for method-family query, skip if no candidate is architecturally viable"},
         "search_query": {"type": "string", "description": "Free-text search query if dispatch_mode is search-method; empty otherwise"},
-        "rationale": {"type": "string", "description": "One sentence: why this pick given trace history + target repo shape"},
-        "expected_terminal": {"type": "string", "description": "Predicted terminal state (pr_opened_draft, issue_opened_preflight, issue_opened, skipped_*)"},
+        "paper_requires": {"type": "string", "description": "What the paper needs the target repo to already have (e.g. 'trainer + optimizer + reward-model head', 'annotation loop + dataset synthesis path', 'inference wrapper + eval scoring'). One line. Required — reason about this BEFORE picking."},
+        "target_has_capability": {"type": "boolean", "description": "True ONLY if the target README + directory structure show clear evidence of the required infrastructure. False if the target would need to grow a new axis for the paper to land. When false, do NOT pick this paper — try another or emit dispatch_mode='skip'."},
+        "rationale": {"type": "string", "description": "One sentence: why this pick given trace history + target repo shape. If skip: explain why no candidate fits."},
+        "expected_terminal": {"type": "string", "description": "Predicted terminal state (pr_opened_draft, issue_opened_preflight, issue_opened, skipped_*). Empty when dispatch_mode is skip."},
     },
-    "required": ["dispatch_mode", "rationale", "expected_terminal"],
+    "required": ["dispatch_mode", "paper_requires", "target_has_capability", "rationale"],
 }
 
 
 DECISION_SCHEMA = {
     "type": "object",
     "properties": {
-        "decision": {"type": "string", "enum": ["MERGE", "ITERATE", "REJECT"]},
+        "decision": {"type": "string", "enum": ["MERGE", "ITERATE", "REJECT", "LEAD"]},
         "rationale": {"type": "string", "description": "Format: hypothesis: {stated} — observed: {measurement} — conclusion: {decision}"},
         "failure_mode": {"type": "string", "description": "If REJECT: short taxonomy label (prior-art-collision, architecture-mismatch, off-domain, fabrication, license-blocked, other). Empty otherwise."},
         "iterate_request": {"type": "string", "description": "If ITERATE: specific refinement to request from remyx-ai[bot]. Empty otherwise."},
+        "lead_content": {"type": "string", "description": "If LEAD: verbatim quote of the preflight-suggested experiment that DOES fit the target's architecture, plus one sentence on why it's viable given the target's existing modules. Empty otherwise."},
     },
     "required": ["decision", "rationale"],
 }
@@ -96,26 +99,37 @@ DECISION_SCHEMA = {
 
 HYPOTHESIS_SYSTEM = """You are the hypothesis stage of an autoresearch loop that evaluates whether published papers can be productively integrated into a target production repository.
 
-Your job: pick ONE paper from the candidate list to dispatch this cycle. Bias toward papers that:
-- Have not appeared in prior cycles' trace (dedup by arxiv_id)
-- Do not repeat a failure mode already observed 2+ times
-- Match the target repo's architectural shape (training paper on inference-only repo = mismatch; and vice versa)
+Your job: pick ONE paper from the candidate list, OR emit dispatch_mode='skip' if no candidate is architecturally viable.
+
+BEFORE picking, reason about architectural fit — this is the primary failure mode observed across prior cycles:
+1. Read the target README snippet to understand what the target IS (training framework? inference wrapper? dataset generator? eval harness? benchmark suite?).
+2. For each candidate you consider, answer honestly: what does this paper REQUIRE the target to already have? (e.g. "trainer + optimizer + reward-model head", "annotation loop + dataset synthesis path", "inference wrapper + benchmark scoring path").
+3. Check whether the target's README + structure show clear evidence of that infrastructure. If the target would need to grow an entirely new axis (adding a trainer to an inference-only repo, adding an eval harness to a training-only framework), the pick is architecturally mismatched — do NOT choose it.
+4. Fill `paper_requires` and `target_has_capability` HONESTLY. If `target_has_capability` would be false, try a different candidate.
+5. If ALL candidates fail the architectural-fit check, emit dispatch_mode='skip' with a rationale explaining why. Better to spend zero dollars than to dispatch a doomed cycle — the loop values honest skips over hopeful dispatches.
+
+Also bias toward:
+- Candidates not appearing in prior cycles' trace (dedup by arxiv_id)
+- Failure modes not already repeated 2+ times in prior cycles
 
 Emit ONE decision via the propose_hypothesis tool. Do NOT explain outside the tool call."""
 
 
 DECISION_SYSTEM = """You are the decision stage of an autoresearch loop.
 
-Your job: read the dispatched artifact (PR or Issue body) and return MERGE, ITERATE, or REJECT with a scientific-method rationale.
+Your job: read the dispatched artifact (PR or Issue body) and return one of MERGE, ITERATE, REJECT, or LEAD with a scientific-method rationale.
 
 Categories:
 - MERGE: PR with real code, fidelity clean, no regressions, eval improved (if eval provided). Only for PRs.
 - ITERATE: promising but incomplete signal; the paper is worth another cycle with a refinement request.
-- REJECT: eval regressed, fidelity flagged fabrication, or the artifact demonstrates the method cannot land cleanly in this target (architecture mismatch, prior art, off-domain).
+- LEAD: the paper itself doesn't fit the target (would otherwise be REJECT), BUT preflight's routing rationale surfaced a "Suggested experiment" section (or equivalent scoped experiment) that DOES fit the target's architecture using its existing modules. Extract the experiment description verbatim into lead_content. This is a distinct value surface — architecturally-viable research bridges derived from mismatched papers.
+- REJECT: eval regressed, fidelity flagged fabrication, prior-art collision, OR the artifact shows the paper cannot land AND no viable experiment lead was surfaced.
+
+Prefer LEAD over REJECT when the artifact contains a concrete experiment slice grounded in the target's existing modules (references specific files, existing benchmarks, existing evaluation paths). REJECT is for artifacts that offer nothing actionable.
 
 Format the rationale as: hypothesis: {stated} — observed: {measurement} — conclusion: {decision}
 
-If REJECT, classify the failure_mode with a short taxonomy label so the loop can aggregate patterns.
+If REJECT, classify the failure_mode. If LEAD, populate lead_content with the verbatim experiment description plus a sentence on why it's architecturally viable.
 
 Emit ONE decision via the emit_decision tool. Do NOT explain outside the tool call."""
 

@@ -18,10 +18,8 @@ def render_report(trace: List[Dict[str, Any]], target_repo: str, budget_usd: flo
 
     merge_eligible = [t for t in trace if t.get("decision") == "MERGE"]
     iterate = [t for t in trace if t.get("decision") == "ITERATE"]
-    preflight_leads = [
-        t for t in trace
-        if t.get("side_lead") or (t.get("artifact_type") == "issue" and "suggested experiment" in (t.get("artifact_body_snippet") or "").lower())
-    ]
+    leads = [t for t in trace if t.get("decision") == "LEAD" and t.get("lead_content")]
+    skipped = [t for t in trace if t.get("decision") == "SKIP"]
 
     lines = []
     lines.append(f"# Autoresearch report — {target_repo}")
@@ -30,9 +28,21 @@ def render_report(trace: List[Dict[str, Any]], target_repo: str, budget_usd: flo
     lines.append("")
     lines.append("## Decisions")
     lines.append("")
-    for k in ("MERGE", "ITERATE", "REJECT"):
+    for k in ("MERGE", "ITERATE", "LEAD", "REJECT", "SKIP"):
         lines.append(f"- **{k}**: {decisions.get(k, 0)}")
     lines.append("")
+
+    # Promote Research LEADs to the top — they're the distinct value surface
+    # for architecturally-mismatched papers where preflight surfaced a fit.
+    if leads:
+        lines.append("## Research LEADs (architecturally-viable experiments)")
+        lines.append("")
+        lines.append("Papers that didn't fit as-is but where preflight surfaced a scoped experiment that DOES fit the target's architecture. Each is a labeled engineering lead worth queueing.")
+        lines.append("")
+        for t in leads:
+            lines.append(f"- Cycle {t['cycle_n']} — [{t.get('arxiv_id')}]({t.get('artifact_url', '#')})")
+            lines.append(f"  > {t.get('lead_content', '')[:400]}")
+            lines.append("")
 
     lines.append("## Cycle log")
     lines.append("")
@@ -61,14 +71,13 @@ def render_report(trace: List[Dict[str, Any]], target_repo: str, budget_usd: flo
             lines.append(f"- Cycle {t['cycle_n']} — [{t.get('arxiv_id')}]({t.get('artifact_url')}) — refinement: {t.get('iterate_request', '')[:250]}")
         lines.append("")
 
-    if preflight_leads:
-        lines.append("## Preflight-suggested experiments (leads)")
+    if skipped:
+        lines.append("## Skipped cycles (pre-dispatch architectural-fit guard)")
         lines.append("")
-        lines.append("Even when a paper is REJECTed, preflight's routing rationale may surface a related experiment that DOES fit the target's architecture. These are candidate directions worth pursuing in future cycles.")
+        lines.append("Cycles where the hypothesis LLM found no architecturally-viable candidate and elected to skip dispatch. Saves $5-10 per skip vs. dispatching a doomed cycle.")
         lines.append("")
-        for t in preflight_leads:
-            lead = t.get("side_lead") or "(see Issue body)"
-            lines.append(f"- Cycle {t['cycle_n']} — [{t.get('artifact_url', 'artifact')}] — {lead[:400]}")
+        for t in skipped:
+            lines.append(f"- Cycle {t['cycle_n']} — {t.get('rationale', '')[:250]}")
         lines.append("")
 
     if failure_modes:

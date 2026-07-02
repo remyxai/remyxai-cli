@@ -233,11 +233,19 @@ def _fetch_artifact_body(url: str) -> tuple:
 
 
 def _post_decision_comment(url: str, decision: Dict[str, Any], hypothesis: Dict[str, Any]) -> None:
+    verdict = decision.get("decision", "REJECT")
     body = (
-        f"@remyx-ai[bot] **{decision['decision']}** — autoresearch loop decision.\n\n"
+        f"@remyx-ai[bot] **{verdict}** — autoresearch loop decision.\n\n"
         f"**Hypothesis (outer agent):** {hypothesis.get('rationale', '')}\n\n"
         f"**Rationale:** {decision.get('rationale', '')}\n"
     )
+    if verdict == "LEAD" and decision.get("lead_content"):
+        body += (
+            f"\n**Research LEAD (architecturally-viable experiment surfaced by preflight):**\n"
+            f"> {decision['lead_content']}\n\n"
+            f"The paper itself doesn't fit, but the experiment above uses existing target modules — "
+            f"this is a labeled engineering lead worth queueing, distinct from a REJECT.\n"
+        )
     if decision.get("failure_mode"):
         body += f"\n**Failure mode:** `{decision['failure_mode']}`\n"
     if decision.get("iterate_request"):
@@ -354,21 +362,39 @@ def handle_autoresearch(
             click.echo(f"  Hypothesis LLM call failed: {e}", err=True)
             break
 
-        click.echo(f"  Hypothesis: {hypothesis.get('arxiv_id') or hypothesis.get('search_query')} — {hypothesis.get('rationale')}")
-        click.echo(f"  Expected terminal: {hypothesis.get('expected_terminal')}")
+        dispatch_mode = hypothesis.get("dispatch_mode", "")
+        paper_requires = hypothesis.get("paper_requires", "")
+        target_has_capability = hypothesis.get("target_has_capability")
+        click.echo(f"  Hypothesis: {hypothesis.get('arxiv_id') or hypothesis.get('search_query') or '(skip)'} — {hypothesis.get('rationale')}")
+        if paper_requires:
+            click.echo(f"  Paper requires: {paper_requires}  ·  Target has: {target_has_capability}")
+        click.echo(f"  Expected terminal: {hypothesis.get('expected_terminal') or '(n/a)'}")
 
         entry = {
             "cycle_n": cycle_n,
             "target_repo": repo,
             "arxiv_id": hypothesis.get("arxiv_id"),
-            "dispatch_mode": hypothesis.get("dispatch_mode"),
+            "dispatch_mode": dispatch_mode,
             "search_method_query": hypothesis.get("search_query"),
             "hypothesis": hypothesis.get("rationale"),
+            "paper_requires": paper_requires,
+            "target_has_capability": target_has_capability,
             "expected_terminal": hypothesis.get("expected_terminal"),
             "provider": provider,
             "model": model,
             "cost_estimate_usd": 0.02,  # hypothesis LLM call only
         }
+
+        # Architectural-fit guard — the hypothesis LLM asked to skip when no
+        # candidate fits. Honor it: don't spend on dispatches the LLM already
+        # knows are doomed. This is the primary cost-saving improvement.
+        if dispatch_mode == "skip":
+            click.echo(f"  SKIP — hypothesis LLM found no architecturally-viable candidate")
+            entry["decision"] = "SKIP"
+            entry["rationale"] = hypothesis.get("rationale") or "no architecturally viable candidate"
+            _append_trace(trace_path, entry)
+            trace.append(entry)
+            continue
 
         if dry_run:
             click.echo("  --dry-run: skipping dispatch")
@@ -445,10 +471,13 @@ def handle_autoresearch(
         entry["rationale"] = decision.get("rationale")
         entry["failure_mode"] = decision.get("failure_mode")
         entry["iterate_request"] = decision.get("iterate_request")
+        entry["lead_content"] = decision.get("lead_content")
         entry["cost_estimate_usd"] += 0.05 + (5.0 if kind == "pr" else 0.5)  # LLM + dispatch cost estimate
 
         click.echo(f"  Decision: {decision.get('decision')}")
         click.echo(f"  Rationale: {decision.get('rationale', '')[:200]}")
+        if decision.get("decision") == "LEAD" and decision.get("lead_content"):
+            click.echo(f"  Lead: {decision.get('lead_content', '')[:200]}")
 
         if not no_comment:
             _post_decision_comment(artifact_url, decision, hypothesis)
