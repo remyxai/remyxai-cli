@@ -80,6 +80,33 @@ def render_report(trace: List[Dict[str, Any]], target_repo: str, budget_usd: flo
             lines.append(f"- Cycle {t['cycle_n']} — {t.get('rationale', '')[:250]}")
         lines.append("")
 
+    # Aggregate refinement_suggestions across all SKIP cycles — engineering
+    # leads for the ranker/interest team when the current candidate pool is
+    # mismatched to the target's architecture.
+    suggestion_counts = {}  # query -> (count, first_seen_why, cycles_seen)
+    for t in skipped:
+        for s in (t.get("refinement_suggestions") or []):
+            q = (s.get("query") or "").strip()
+            if not q:
+                continue
+            if q not in suggestion_counts:
+                suggestion_counts[q] = {"count": 0, "why": s.get("why", ""), "cycles": []}
+            suggestion_counts[q]["count"] += 1
+            suggestion_counts[q]["cycles"].append(t.get("cycle_n"))
+    if suggestion_counts:
+        lines.append("## Interest Refinement Suggestions")
+        lines.append("")
+        lines.append("The hypothesis LLM SKIPped cycles finding no viable candidate in the ranker's current picks — but named specific alternative queries that would likely surface architecturally-matched papers. Copy-pasteable engineering leads for the ranker / interest-context team.")
+        lines.append("")
+        # Sort by count desc, then by first appearance
+        ordered = sorted(suggestion_counts.items(), key=lambda kv: (-kv[1]["count"], kv[1]["cycles"][0]))
+        for query, info in ordered:
+            recurrence = f" (proposed {info['count']}×)" if info["count"] > 1 else ""
+            lines.append(f"- `{query}`{recurrence} — {info['why'][:200]}")
+        lines.append("")
+        lines.append("**Next steps:** plug one into `remyxai search query \"<query>\"` to explore alternatives, or refine the interest context to encode these axes.")
+        lines.append("")
+
     if failure_modes:
         lines.append("## Failure-mode taxonomy")
         lines.append("")

@@ -79,6 +79,18 @@ HYPOTHESIS_SCHEMA = {
         "target_has_capability": {"type": "boolean", "description": "True ONLY if the target README + directory structure show clear evidence of the required infrastructure. False if the target would need to grow a new axis for the paper to land. When false, do NOT pick this paper — try another or emit dispatch_mode='skip'."},
         "rationale": {"type": "string", "description": "One sentence: why this pick given trace history + target repo shape. If skip: explain why no candidate fits."},
         "expected_terminal": {"type": "string", "description": "Predicted terminal state (pr_opened_draft, issue_opened_preflight, issue_opened, skipped_*). Empty when dispatch_mode is skip."},
+        "refinement_suggestions": {
+            "type": "array",
+            "description": "When dispatch_mode='skip': 1-3 alternative search queries that would surface architecturally-viable papers for this target, each with a one-sentence justification tied to the target's specific shape. Empty when dispatching. These become copy-pasteable engineering leads for the ranker/interest team.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Free-text search query, e.g. 'efficient pre-ranking cross-interaction'"},
+                    "why": {"type": "string", "description": "One sentence: why this query would surface papers that fit the target's architecture"},
+                },
+                "required": ["query", "why"],
+            },
+        },
     },
     "required": ["dispatch_mode", "paper_requires", "target_has_capability", "rationale"],
 }
@@ -107,6 +119,7 @@ BEFORE picking, reason about architectural fit — this is the primary failure m
 3. Check whether the target's README + structure show clear evidence of that infrastructure. If the target would need to grow an entirely new axis (adding a trainer to an inference-only repo, adding an eval harness to a training-only framework), the pick is architecturally mismatched — do NOT choose it.
 4. Fill `paper_requires` and `target_has_capability` HONESTLY. If `target_has_capability` would be false, try a different candidate.
 5. If ALL candidates fail the architectural-fit check, emit dispatch_mode='skip' with a rationale explaining why. Better to spend zero dollars than to dispatch a doomed cycle — the loop values honest skips over hopeful dispatches.
+6. When emitting 'skip', ALSO populate `refinement_suggestions` with 1-3 alternative search queries that WOULD surface papers architecturally matched to this target. Each suggestion should be a free-text query (as if for `remyxai search query`) paired with one sentence naming what target-axis it targets. These queries are copy-pasteable engineering leads for the ranker team — be specific ("efficient pre-ranking cross-interaction" beats "recommendation systems"). If you truly cannot articulate what would fit, emit an empty array — do not fill with vague filler.
 
 Also bias toward:
 - Candidates not appearing in prior cycles' trace (dedup by arxiv_id)

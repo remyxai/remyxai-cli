@@ -402,6 +402,9 @@ def handle_autoresearch(
             click.echo(f"  SKIP — hypothesis LLM found no architecturally-viable candidate")
             entry["decision"] = "SKIP"
             entry["rationale"] = hypothesis.get("rationale") or "no architecturally viable candidate"
+            entry["refinement_suggestions"] = hypothesis.get("refinement_suggestions") or []
+            for s in entry["refinement_suggestions"]:
+                click.echo(f"    → try: \"{s.get('query', '')}\" — {s.get('why', '')[:100]}")
             _append_trace(trace_path, entry)
             trace.append(entry)
             continue
