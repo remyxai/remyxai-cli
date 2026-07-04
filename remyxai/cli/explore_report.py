@@ -1,5 +1,5 @@
 """
-Markdown report generator for the autoresearch loop.
+Markdown report generator for the explore loop.
 
 Renders ``.remyx-autoresearch/report.md`` from the appended trace.jsonl.
 Kept as inline strings (no Jinja) to avoid a new dep.

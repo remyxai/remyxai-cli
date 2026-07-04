@@ -1,5 +1,5 @@
 """
-Structured LLM calls for the autoresearch loop.
+Structured LLM calls for the explore loop.
 
 Two calls per cycle:
 - ``propose_hypothesis`` — pick one paper from the ranker's top-N given trace history
@@ -109,7 +109,7 @@ DECISION_SCHEMA = {
 }
 
 
-HYPOTHESIS_SYSTEM = """You are the hypothesis stage of an autoresearch loop that evaluates whether published papers can be productively integrated into a target production repository.
+HYPOTHESIS_SYSTEM = """You are the hypothesis stage of an explore loop that evaluates whether published papers can be productively integrated into a target production repository.
 
 Your job: pick ONE paper from the candidate list, OR emit dispatch_mode='skip' if no candidate is architecturally viable.
 
@@ -128,7 +128,7 @@ Also bias toward:
 Emit ONE decision via the propose_hypothesis tool. Do NOT explain outside the tool call."""
 
 
-DECISION_SYSTEM = """You are the decision stage of an autoresearch loop.
+DECISION_SYSTEM = """You are the decision stage of an explore loop.
 
 Your job: read the dispatched artifact (PR or Issue body) and return one of MERGE, ITERATE, REJECT, or LEAD with a scientific-method rationale.
 

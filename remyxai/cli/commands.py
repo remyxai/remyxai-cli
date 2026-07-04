@@ -32,7 +32,7 @@ from remyxai.cli.outrider_actions import (
     handle_set_provider_secret,
 )
 from remyxai.cli.outrider_local import handle_outrider_setup_local
-from remyxai.cli.autoresearch import handle_autoresearch
+from remyxai.cli.explore import handle_explore
 
 
 @click.group()
@@ -933,7 +933,7 @@ def outrider_set_provider_secret(repo, provider, key_from):
     handle_set_provider_secret(repo=repo, provider=provider, key_from=key_from)
 
 
-@outrider.command("autoresearch")
+@outrider.command("explore")
 @click.option("--repo", "repo", default=None,
               help="Target repo as owner/name. Detects from CWD if unset.")
 @click.option("--interest", "-i", "interest_id", default="auto",
@@ -952,14 +952,15 @@ def outrider_set_provider_secret(repo, provider, key_from):
               help="Skip posting the decision comment on artifacts (dry-review mode).")
 @click.option("--api-key", "api_key", default=None,
               help="Override REMYXAI_API_KEY for engine API calls.")
-def outrider_autoresearch(repo, interest_id, cycles, budget_usd, provider, model, dry_run, no_comment, api_key):
+def outrider_explore(repo, interest_id, cycles, budget_usd, provider, model, dry_run, no_comment, api_key):
     """
-    Run the autoresearch loop against a target repo.
+    Batched design-review dispatch against a target repo.
 
     Repeatedly proposes papers from the ranker's top-N (respecting prior-art
     and trace dedup), dispatches Outrider, reads the resulting artifact,
-    decides MERGE/ITERATE/REJECT with rationale, and appends to a per-target
-    trace at .remyx-autoresearch/trace.jsonl.
+    decides MERGE/ITERATE/LEAD/REJECT with rationale, and appends to a
+    per-target trace at .remyx-autoresearch/trace.jsonl. The by-product
+    across cycles is a labeled inventory of the target's integration gaps.
 
     Safety-by-design:
     - Loop never writes code to the target repo — only dispatches Outrider
@@ -972,19 +973,19 @@ def outrider_autoresearch(repo, interest_id, cycles, budget_usd, provider, model
     Examples:
 
     \b
-      # 5-cycle loop with default settings
-      remyxai outrider autoresearch --repo owner/name
+      # 5-cycle explore run with default settings
+      remyxai outrider explore --repo owner/name
 
-      # Cheap exploration with GLM outer loop + Anthropic dispatches
-      remyxai outrider autoresearch --repo owner/name --provider zai --model glm-5.2
+      # Cheap batched dispatch with GLM outer loop
+      remyxai outrider explore --repo owner/name --provider zai --model glm-5.2
 
       # Dry-run: see what the loop would propose without spending on dispatches
-      remyxai outrider autoresearch --repo owner/name --dry-run
+      remyxai outrider explore --repo owner/name --dry-run
 
       # Bounded run
-      remyxai outrider autoresearch --repo owner/name --cycles 3 --budget 25
+      remyxai outrider explore --repo owner/name --cycles 3 --budget 25
     """
-    handle_autoresearch(
+    handle_explore(
         repo=repo,
         interest_id=interest_id,
         cycles=cycles,

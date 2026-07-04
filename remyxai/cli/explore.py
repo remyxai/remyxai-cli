@@ -1,5 +1,5 @@
 """
-Autoresearch loop orchestrator.
+Explore loop orchestrator.
 
 Repeatedly proposes papers from the ranker's top-N, dispatches Outrider,
 reads the resulting artifact, decides MERGE/ITERATE/REJECT with rationale,
@@ -22,12 +22,12 @@ from typing import Any, Dict, List, Optional
 
 import click
 
-from remyxai.cli.autoresearch_llm import (
+from remyxai.cli.explore_llm import (
     decide_from_artifact,
     propose_hypothesis,
     LLMError,
 )
-from remyxai.cli.autoresearch_report import render_report
+from remyxai.cli.explore_report import render_report
 from remyxai.cli.outrider_actions import (
     WORKFLOW_FILENAME,
     _gh_dispatch_outrider,
@@ -235,7 +235,7 @@ def _fetch_artifact_body(url: str) -> tuple:
 def _post_decision_comment(url: str, decision: Dict[str, Any], hypothesis: Dict[str, Any]) -> None:
     verdict = decision.get("decision", "REJECT")
     body = (
-        f"@remyx-ai[bot] **{verdict}** — autoresearch loop decision.\n\n"
+        f"@remyx-ai[bot] **{verdict}** — explore loop decision.\n\n"
         f"**Hypothesis (outer agent):** {hypothesis.get('rationale', '')}\n\n"
         f"**Rationale:** {decision.get('rationale', '')}\n"
     )
@@ -271,7 +271,7 @@ def _fetch_interest_context(interest_id: str, api_key: Optional[str]) -> str:
         return ""
 
 
-def handle_autoresearch(
+def handle_explore(
     repo: Optional[str],
     interest_id: Optional[str],
     cycles: int,
@@ -303,7 +303,7 @@ def handle_autoresearch(
     trace_path, report_path = _trace_paths()
     trace = _load_trace(trace_path)
 
-    click.echo(f"Autoresearch loop on {repo}")
+    click.echo(f"Explore loop on {repo}")
     click.echo(f"  Interest: {interest_id}")
     click.echo(f"  Cycles: {cycles}  ·  Budget: ${budget_usd:.0f}  ·  Prior trace: {len(trace)} cycles")
     click.echo(f"  Trace: {trace_path}")
