@@ -40,7 +40,13 @@ logger = logging.getLogger(__name__)
 
 WORKFLOW_FILENAME = "outrider.yml"
 WORKFLOW_PATH = f".github/workflows/{WORKFLOW_FILENAME}"
+
+# Two-tier setup paths — companions to WORKFLOW_PATH under --two-tier.
+DRAFTER_WORKFLOW_PATH = ".github/workflows/outrider-daily.yml"
+REFINER_WORKFLOW_PATH = ".github/workflows/outrider-weekly-refine.yml"
+
 PR_TITLE = "Install Outrider — weekly arXiv → recommendation PRs"
+PR_TITLE_TWO_TIER = "Install Outrider (two-tier drafter/refiner setup)"
 
 
 # ─── gh helpers ─────────────────────────────────────────────────────────────
@@ -363,13 +369,99 @@ jobs:
 """
 
 
+# ─── two-tier templates (drafter + refiner) ────────────────────────────────
+#
+# When ``--two-tier`` is set on ``setup-local``, the CLI fetches the drafter +
+# refiner templates from ``remyxai/outrider@v1`` at install time rather than
+# embedding them inline. This treats the outrider repo as the canonical source
+# of truth for the workflow shape — bugfixes to the picker heuristic, updates
+# to the gap-analysis prompt, changes to the model tier defaults, all land on
+# the outrider repo first and propagate to new customer installs automatically
+# without requiring a CLI release.
+#
+# The drafter template has one substitution point (the ``interest-id``); the
+# refiner has none (it dispatches outrider.yml which reads interest-id from
+# its own configuration).
+#
+# See remyxai/outrider docs/customization.md §5 for the design rationale.
+
+_OUTRIDER_TEMPLATE_REPO = "remyxai/outrider"
+_OUTRIDER_TEMPLATE_REF = "v1"  # moves with each Outrider action release
+_DRAFTER_TEMPLATE_PATH = ".github/workflows/outrider-daily.yml"
+_REFINER_TEMPLATE_PATH = ".github/workflows/outrider-weekly-refine.yml"
+
+# The outrider repo's own drafter has a hardcoded interest-id for its self-test.
+# We rewrite that specific string to the customer's interest-id at render time.
+_OUTRIDER_SELF_INTEREST_ID = "29ca03e7-454d-446c-9941-32c96c53d95d"
+
+
+def _fetch_outrider_template(path: str) -> str:
+    """Fetch a workflow-template file from remyxai/outrider@v1 via `gh api`.
+
+    Raises ClickException if the fetch fails — the caller should treat this
+    as a hard error (missing template = we can't install the two-tier setup).
+    """
+    import base64
+    try:
+        payload = _gh_api_json([
+            "api", f"repos/{_OUTRIDER_TEMPLATE_REPO}/contents/{path}?ref={_OUTRIDER_TEMPLATE_REF}",
+        ])
+    except Exception as e:
+        raise click.ClickException(
+            f"could not fetch {path} from {_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF} "
+            f"(gh api failed): {e}"
+        )
+    content_b64 = payload.get("content", "")
+    if not content_b64:
+        raise click.ClickException(
+            f"{path} on {_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF} is empty."
+        )
+    return base64.b64decode(content_b64).decode()
+
+
+def _render_drafter_workflow(interest_id: str) -> str:
+    """Drafter template — fetched live from remyxai/outrider@v1 with the
+    self-test interest-id rewritten to the customer's."""
+    raw = _fetch_outrider_template(_DRAFTER_TEMPLATE_PATH)
+    if _OUTRIDER_SELF_INTEREST_ID not in raw:
+        raise click.ClickException(
+            f"drafter template on {_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF} "
+            f"no longer contains the expected self-interest-id placeholder "
+            f"({_OUTRIDER_SELF_INTEREST_ID}); template format may have changed. "
+            f"CLI needs an update."
+        )
+    return raw.replace(_OUTRIDER_SELF_INTEREST_ID, interest_id)
+
+
+def _render_refiner_workflow() -> str:
+    """Refiner template — fetched live from remyxai/outrider@v1 verbatim.
+
+    The refiner has no interest-id substitution point; it dispatches
+    outrider.yml (via workflow_dispatch) which reads its own interest-id.
+    """
+    return _fetch_outrider_template(_REFINER_TEMPLATE_PATH)
+
+
 # ─── main handler ──────────────────────────────────────────────────────────
 
 def handle_outrider_setup_local(
     repo, interest_id, auto_interest, mode,
     anthropic_key, skip_confirm, dry_run, no_cron=False, no_cocoindex=False,
+    two_tier=False,
 ):
-    """Self-provision Outrider with the user's own gh token (no Remyx App)."""
+    """Self-provision Outrider with the user's own gh token (no Remyx App).
+
+    When ``two_tier=True``, installs the drafter + refiner companions
+    (`outrider-daily.yml`, `outrider-weekly-refine.yml`) alongside the
+    manual-dispatch `outrider.yml` — the recommended default for repos
+    where continuous exploration + weekly promotion is wanted. Templates
+    are fetched from ``remyxai/outrider@v1`` at install time so template
+    updates propagate to new installs without a CLI release. See
+    ``remyxai/outrider`` docs/customization.md §5 for design details.
+
+    ``--two-tier`` currently opts in — it's a strict superset of the
+    legacy single-file install, and existing installs are unaffected.
+    """
     import os
 
     if interest_id and auto_interest:
@@ -409,14 +501,30 @@ def handle_outrider_setup_local(
     click.echo(f"  - Secrets:   REMYX_API_KEY, ANTHROPIC_API_KEY")
     click.echo("  - PR auth:   enable the repo 'Actions can create PRs' setting "
                "(PRs by github-actions[bot])")
-    click.echo(f"  - Writes:    {WORKFLOW_PATH} on a branch + opens a PR")
+    if two_tier:
+        click.echo(f"  - Writes:    {WORKFLOW_PATH} (manual dispatch, no cron)")
+        click.echo(f"               {DRAFTER_WORKFLOW_PATH} (daily drafter, Haiku 4.5, publish=branch)")
+        click.echo(f"               {REFINER_WORKFLOW_PATH} (weekly refiner, picks + gap-gens + dispatches Opus)")
+        click.echo("               (three files on a branch → one PR — templates fetched live from remyxai/outrider@v1)")
+    else:
+        click.echo(f"  - Writes:    {WORKFLOW_PATH} on a branch + opens a PR")
     click.echo("")
 
     if dry_run:
-        click.echo("--- rendered workflow ---")
-        click.echo(_render_local_workflow(
-            "<interest-id>", no_cron=no_cron, no_cocoindex=no_cocoindex,
-        ))
+        if two_tier:
+            click.echo("--- rendered outrider.yml (workflow_dispatch only) ---")
+            click.echo(_render_local_workflow(
+                "<interest-id>", no_cron=True, no_cocoindex=no_cocoindex,
+            ))
+            click.echo("\n--- rendered outrider-daily.yml (drafter) ---")
+            click.echo(_render_drafter_workflow("<interest-id>"))
+            click.echo("\n--- rendered outrider-weekly-refine.yml (refiner) ---")
+            click.echo(_render_refiner_workflow())
+        else:
+            click.echo("--- rendered workflow ---")
+            click.echo(_render_local_workflow(
+                "<interest-id>", no_cron=no_cron, no_cocoindex=no_cocoindex,
+            ))
         click.secho("dry-run: no changes made.", fg="yellow")
         return
 
@@ -456,12 +564,32 @@ def handle_outrider_setup_local(
         branch_created = True
         click.echo(f"✓ Created branch {branch_name}")
 
+        # Under --two-tier: outrider.yml is manual-dispatch only (no cron —
+        # scheduled runs come from outrider-daily.yml + outrider-weekly-refine.yml).
+        # Otherwise: legacy single-file install with whatever cron the caller wants.
         workflow = _render_local_workflow(
-            resolved_interest, no_cron=no_cron, no_cocoindex=no_cocoindex,
+            resolved_interest,
+            no_cron=(no_cron or two_tier),
+            no_cocoindex=no_cocoindex,
         )
         _gh_put_file(resolved_repo, branch_name, WORKFLOW_PATH, workflow,
                      "Install Outrider (self-provisioned via remyxai CLI)")
         click.echo(f"✓ Wrote {WORKFLOW_PATH}")
+
+        if two_tier:
+            drafter_yml = _render_drafter_workflow(resolved_interest)
+            _gh_put_file(
+                resolved_repo, branch_name, DRAFTER_WORKFLOW_PATH, drafter_yml,
+                "Install Outrider two-tier drafter (self-provisioned)",
+            )
+            click.echo(f"✓ Wrote {DRAFTER_WORKFLOW_PATH}")
+
+            refiner_yml = _render_refiner_workflow()
+            _gh_put_file(
+                resolved_repo, branch_name, REFINER_WORKFLOW_PATH, refiner_yml,
+                "Install Outrider two-tier refiner (self-provisioned)",
+            )
+            click.echo(f"✓ Wrote {REFINER_WORKFLOW_PATH}")
 
         body = (
             f"Installs [Outrider](https://github.com/remyxai/outrider) "
