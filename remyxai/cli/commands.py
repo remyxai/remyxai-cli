@@ -702,6 +702,44 @@ def outrider_init(
                   "call-site claims on real paths. See outrider's "
                   "docs/environments.md for the rationale."
               ))
+@click.option("--two-tier", "two_tier", is_flag=True, default=False,
+              help=(
+                  "Install the two-tier drafter/refiner setup (recommended "
+                  "default for repos where continuous exploration + weekly "
+                  "promotion is wanted). Writes outrider-daily.yml (drafter, "
+                  "Anthropic Haiku 4.5, publish=branch, daily cron) and "
+                  "outrider-weekly-refine.yml (refiner orchestrator, weekly "
+                  "cron, picks candidate + generates gap analysis via Sonnet "
+                  "4.6 + dispatches Opus refinement) alongside a manual-"
+                  "dispatch outrider.yml. Templates are fetched from "
+                  "remyxai/outrider@v1 at install time. See remyxai/outrider "
+                  "docs/customization.md §5 for the design rationale."
+              ))
+@click.option("--drafter-model", "drafter_model", default=None,
+              help=(
+                  "Optional model for the two-tier drafter (outrider-daily.yml). "
+                  "e.g. glm-5.2, claude-sonnet-4-6. A GLM model routes the stage "
+                  "at z.ai (needs a ZAI_API_KEY). Omit to keep the single-provider "
+                  "default (Haiku 4.5). Requires --two-tier."
+              ))
+@click.option("--refiner-model", "refiner_model", default=None,
+              help=(
+                  "Optional model for the two-tier refiner's gap-analysis call "
+                  "(outrider-weekly-refine.yml). GLM routes at z.ai. Omit for the "
+                  "default (Sonnet 4.6). Requires --two-tier."
+              ))
+@click.option("--refine-model", "refine_model", default=None,
+              help=(
+                  "Optional model the refiner dispatches for the final refinement "
+                  "run. GLM routes at z.ai (via the runner's provider mapping). "
+                  "Omit for the default (Opus 4.8). Requires --two-tier."
+              ))
+@click.option("--zai-key", "zai_key", default=None,
+              help=(
+                  "z.ai GLM Coding Plan API key, set as the ZAI_API_KEY repo "
+                  "secret. Only needed when a --*-model selects a GLM model; "
+                  "falls back to $ZAI_API_KEY / $Z_AI_KEY, else prompts."
+              ))
 @click.option("--bulk-repos", "bulk_repos", type=click.Path(), default=None,
               help=(
                   "Path to a TSV mapping repos to ResearchInterest UUIDs "
@@ -717,7 +755,8 @@ def outrider_init(
               help="Skip the confirmation prompt (default is opt-in).")
 def outrider_setup_local(
     repo, interest_id, auto_interest, mode, anthropic_key,
-    no_cron, no_cocoindex, bulk_repos, pace_s, dry_run, skip_confirm,
+    no_cron, no_cocoindex, two_tier, drafter_model, refiner_model, refine_model,
+    zai_key, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider WITHOUT the Remyx GitHub App.
@@ -762,6 +801,11 @@ def outrider_setup_local(
                 dry_run=dry_run,
                 no_cron=no_cron,
                 no_cocoindex=no_cocoindex,
+                two_tier=two_tier,
+                drafter_model=drafter_model,
+                refiner_model=refiner_model,
+                refine_model=refine_model,
+                zai_key=zai_key,
             ),
             pace_s=pace_s,
         )
@@ -776,6 +820,11 @@ def outrider_setup_local(
         dry_run=dry_run,
         no_cron=no_cron,
         no_cocoindex=no_cocoindex,
+        two_tier=two_tier,
+        drafter_model=drafter_model,
+        refiner_model=refiner_model,
+        refine_model=refine_model,
+        zai_key=zai_key,
     )
 
 
