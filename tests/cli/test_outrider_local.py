@@ -117,6 +117,75 @@ def test_render_forwards_workflow_dispatch_inputs_to_action():
         )
 
 
+def test_render_declares_and_forwards_refiner_dispatch_inputs():
+    """The runner must declare + forward every input the refiner
+    (outrider-weekly-refine.yml) dispatches — mode, publish, start-from-ref,
+    lead-content, staged-synthesis — or GitHub rejects the dispatch as an
+    unknown workflow_dispatch key and no refinement PR opens."""
+    wf = outrider_local._render_local_workflow("uuid")
+    for name in ("mode", "publish", "start-from-ref", "lead-content", "staged-synthesis"):
+        assert f"      {name}:" in wf, f"missing input declaration: {name}"
+        assert f"{name}: ${{{{ inputs.{name} }}}}" in wf, f"missing forwarding for {name}"
+    # Defaults match the action's own so scheduled/manual runs are unchanged.
+    assert "default: 'recommend'" in wf   # mode
+    assert "default: 'pr'" in wf          # publish
+
+
+# ─── two-tier template rendering (fetched from remyxai/outrider@v1) ──────────
+
+_FAKE_DRAFTER_TEMPLATE = (
+    "name: Outrider daily\n"
+    "on:\n  schedule:\n    - cron: '0 6 * * *'\n"
+    "jobs:\n  scout:\n    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "      - uses: ./\n"
+    "        with:\n"
+    "          interest-id: '29ca03e7-454d-446c-9941-32c96c53d95d'\n"
+    "          publish: branch\n"
+)
+
+
+def test_render_drafter_rewrites_local_action_and_interest_id():
+    """The drafter fetched from @v1 uses `uses: ./` (resolves only inside the
+    outrider repo) and a self-test interest-id. Both must be rewritten so the
+    installed drafter targets the published action + customer's interest."""
+    with patch.object(outrider_local, "_fetch_outrider_template",
+                      return_value=_FAKE_DRAFTER_TEMPLATE):
+        rendered = outrider_local._render_drafter_workflow("cust-uuid")
+    assert "uses: ./" not in rendered
+    assert "uses: remyxai/outrider@v1" in rendered
+    assert "interest-id: 'cust-uuid'" in rendered
+    assert outrider_local._OUTRIDER_SELF_INTEREST_ID not in rendered
+
+
+def test_render_drafter_guards_missing_local_action_ref():
+    """If the template stops referencing the action via `uses: ./`, fail loud
+    rather than silently shipping an un-rewritten drafter."""
+    broken = _FAKE_DRAFTER_TEMPLATE.replace("uses: ./", "uses: remyxai/outrider@v1")
+    with patch.object(outrider_local, "_fetch_outrider_template", return_value=broken):
+        with pytest.raises(click.ClickException, match="no longer references the action"):
+            outrider_local._render_drafter_workflow("cust-uuid")
+
+
+def test_fetch_outrider_template_calls_gh_api_without_double_prefix(monkeypatch):
+    """Regression: _fetch_outrider_template must pass the contents path directly
+    to _gh_api_json (which already prepends `gh api`), not a leading 'api' arg
+    that would produce `gh api api repos/...`."""
+    import base64
+    captured = {}
+
+    def fake_gh_api_json(args):
+        captured["args"] = args
+        return {"content": base64.b64encode(b"hello").decode()}
+
+    monkeypatch.setattr(outrider_local, "_gh_api_json", fake_gh_api_json)
+    out = outrider_local._fetch_outrider_template(".github/workflows/outrider-daily.yml")
+    assert out == "hello"
+    assert captured["args"][0] != "api"
+    assert captured["args"][0].startswith("repos/remyxai/outrider/contents/")
+    assert "ref=v1" in captured["args"][0]
+
+
 # ─── gh secret stdin invariant ───────────────────────────────────────────────
 
 def test_gh_set_secret_value_via_stdin(monkeypatch):

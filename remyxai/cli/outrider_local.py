@@ -307,6 +307,31 @@ on:
         description: 'Optional exact arxiv_id (e.g. 2402.02347v3). Bypasses selection and implements this specific paper. Use for reproducible re-runs.'
         required: false
         default: ''
+      # The five inputs below let outrider-weekly-refine.yml (the refiner)
+      # dispatch this runner: it pins the picked draft branch (start-from-ref),
+      # pipes a gap analysis in (lead-content), turns on staged synthesis, and
+      # selects mode/publish. Defaults match the action's own, so scheduled and
+      # manual runs are unchanged.
+      mode:
+        description: 'Run mode. recommend (default) runs the full scout→implement flow; the refiner dispatches recommend against a pinned paper + start-from-ref.'
+        required: false
+        default: 'recommend'
+      publish:
+        description: 'pr (default) opens a PR/Issue; branch produces a fork branch without opening one (drafter behavior).'
+        required: false
+        default: 'pr'
+      start-from-ref:
+        description: 'Optional base branch to build on top of (the refiner passes the picked drafter branch here). Empty = start from the default branch.'
+        required: false
+        default: ''
+      lead-content:
+        description: 'Optional inline markdown (e.g. a gap analysis) fed to the agent as leading context. Used by the refiner dispatch.'
+        required: false
+        default: ''
+      staged-synthesis:
+        description: 'Enable the multi-pass staged-synthesis flow (the refiner sets true). Empty/false = single-pass.'
+        required: false
+        default: 'false'
       claude-timeout:
         description: 'Wall-clock seconds for the Claude Code agent calls (preflight + implementation). Raise for very large monorepos; lower to cap cost.'
         required: false
@@ -362,6 +387,14 @@ jobs:
           search-method: ${{{{ inputs.search-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
           claude-timeout: ${{{{ inputs.claude-timeout }}}}
+          # Forwarded so outrider-weekly-refine.yml can dispatch a refinement
+          # run (mode + start-from-ref + lead-content + staged-synthesis) and
+          # so the drafter/manual runs can pick pr vs branch publishing.
+          mode: ${{{{ inputs.mode }}}}
+          publish: ${{{{ inputs.publish }}}}
+          start-from-ref: ${{{{ inputs.start-from-ref }}}}
+          lead-content: ${{{{ inputs.lead-content }}}}
+          staged-synthesis: ${{{{ inputs.staged-synthesis }}}}
           # Maps provider name → base URL. Adding more providers here
           # extends the table (Bedrock / Vertex / on-prem); leave
           # empty on the default Anthropic path.
@@ -394,6 +427,13 @@ _REFINER_TEMPLATE_PATH = ".github/workflows/outrider-weekly-refine.yml"
 # We rewrite that specific string to the customer's interest-id at render time.
 _OUTRIDER_SELF_INTEREST_ID = "29ca03e7-454d-446c-9941-32c96c53d95d"
 
+# The outrider repo's templates reference the action locally (``uses: ./``),
+# which only resolves from inside the outrider repo itself. On a customer
+# install that path points at the target repo's root (no action.yml there),
+# so we rewrite it to the published action ref at render time.
+_LOCAL_ACTION_USES = "uses: ./"
+_PUBLISHED_ACTION_USES = f"uses: {_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF}"
+
 
 def _fetch_outrider_template(path: str) -> str:
     """Fetch a workflow-template file from remyxai/outrider@v1 via `gh api`.
@@ -404,7 +444,7 @@ def _fetch_outrider_template(path: str) -> str:
     import base64
     try:
         payload = _gh_api_json([
-            "api", f"repos/{_OUTRIDER_TEMPLATE_REPO}/contents/{path}?ref={_OUTRIDER_TEMPLATE_REF}",
+            f"repos/{_OUTRIDER_TEMPLATE_REPO}/contents/{path}?ref={_OUTRIDER_TEMPLATE_REF}",
         ])
     except Exception as e:
         raise click.ClickException(
@@ -421,7 +461,8 @@ def _fetch_outrider_template(path: str) -> str:
 
 def _render_drafter_workflow(interest_id: str) -> str:
     """Drafter template — fetched live from remyxai/outrider@v1 with the
-    self-test interest-id rewritten to the customer's."""
+    self-test interest-id rewritten to the customer's and the local action
+    reference (``uses: ./``) rewritten to the published action ref."""
     raw = _fetch_outrider_template(_DRAFTER_TEMPLATE_PATH)
     if _OUTRIDER_SELF_INTEREST_ID not in raw:
         raise click.ClickException(
@@ -430,7 +471,16 @@ def _render_drafter_workflow(interest_id: str) -> str:
             f"({_OUTRIDER_SELF_INTEREST_ID}); template format may have changed. "
             f"CLI needs an update."
         )
-    return raw.replace(_OUTRIDER_SELF_INTEREST_ID, interest_id)
+    if _LOCAL_ACTION_USES not in raw:
+        raise click.ClickException(
+            f"drafter template on {_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF} "
+            f"no longer references the action via '{_LOCAL_ACTION_USES}'; template "
+            f"format may have changed. CLI needs an update."
+        )
+    return (
+        raw.replace(_OUTRIDER_SELF_INTEREST_ID, interest_id)
+           .replace(_LOCAL_ACTION_USES, _PUBLISHED_ACTION_USES)
+    )
 
 
 def _render_refiner_workflow() -> str:
@@ -506,6 +556,9 @@ def handle_outrider_setup_local(
         click.echo(f"               {DRAFTER_WORKFLOW_PATH} (daily drafter, Haiku 4.5, publish=branch)")
         click.echo(f"               {REFINER_WORKFLOW_PATH} (weekly refiner, picks + gap-gens + dispatches Opus)")
         click.echo("               (three files on a branch → one PR — templates fetched live from remyxai/outrider@v1)")
+        click.secho("  - Note:      forks don't run scheduled workflows — the daily/weekly "
+                    "crons need an external dispatcher on a fork (workflow_dispatch is unaffected).",
+                    fg="yellow")
     else:
         click.echo(f"  - Writes:    {WORKFLOW_PATH} on a branch + opens a PR")
     click.echo("")
@@ -597,8 +650,22 @@ def handle_outrider_setup_local(
             f"Research interest: `{resolved_interest}`\n\n"
             f"Generated by `remyxai outrider setup-local`."
         )
+        if two_tier:
+            body += (
+                "\n\n**Two-tier setup** — installs a daily drafter "
+                "(`outrider-daily.yml`) and a weekly refiner "
+                "(`outrider-weekly-refine.yml`) alongside the manual-dispatch "
+                "runner.\n\n"
+                "> **Note — forks:** GitHub disables/deprioritizes `schedule:` "
+                "triggers on forked repos, so the drafter's daily cron and the "
+                "refiner's weekly cron will not self-run on a fork. "
+                "`workflow_dispatch` (manual / `gh workflow run`) works either "
+                "way; drive the cadence from an external dispatcher if this repo "
+                "is a fork."
+            )
         pr_url, pr_number = _gh_open_pr(
-            resolved_repo, branch_name, default_branch, PR_TITLE, body,
+            resolved_repo, branch_name, default_branch,
+            PR_TITLE_TWO_TIER if two_tier else PR_TITLE, body,
             draft=(mode != "auto"),
         )
         click.echo(f"✓ Opened PR: {pr_url}")
