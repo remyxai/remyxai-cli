@@ -136,12 +136,42 @@ def test_render_declares_and_forwards_refiner_dispatch_inputs():
 _FAKE_DRAFTER_TEMPLATE = (
     "name: Outrider daily\n"
     "on:\n  schedule:\n    - cron: '0 6 * * *'\n"
-    "jobs:\n  scout:\n    steps:\n"
+    "jobs:\n  scout:\n    env:\n"
+    "      REMYX_API_KEY: ${{ secrets.REMYX_API_KEY }}\n"
+    "      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n"
+    "      ANTHROPIC_MODEL: claude-haiku-4-5\n"
+    "    steps:\n"
     "      - uses: actions/checkout@v4\n"
     "      - uses: ./\n"
     "        with:\n"
     "          interest-id: '29ca03e7-454d-446c-9941-32c96c53d95d'\n"
     "          publish: branch\n"
+)
+
+# Mirrors the @v1 refiner's gap-analysis call + Opus dispatch anchors.
+_FAKE_REFINER_TEMPLATE = (
+    "name: Outrider weekly refine\n"
+    "on:\n  workflow_dispatch: {}\n"
+    "jobs:\n  refine:\n    steps:\n"
+    "      - name: Generate gap analysis\n        id: gap\n        env:\n"
+    "          BRANCH: ${{ steps.pick.outputs.picked }}\n"
+    "          REPO: ${{ github.repository }}\n"
+    "        run: |\n"
+    "          python3 - <<'PYEOF'\n"
+    "          req = urllib.request.Request(\n"
+    '              "https://api.anthropic.com/v1/messages",\n'
+    "              data=json.dumps({\n"
+    '                  "model": "claude-sonnet-4-6",\n'
+    "              }).encode(),\n"
+    "              headers={\n"
+    '                  "x-api-key": os.environ["ANTHROPIC_API_KEY"],\n'
+    "              },\n"
+    "          )\n          PYEOF\n"
+    "      - name: Dispatch Opus refinement\n        run: |\n"
+    "          gh workflow run outrider.yml \\\n"
+    "            -f provider=anthropic \\\n"
+    "            -f model=claude-opus-4-8 \\\n"
+    "            -f publish=pr\n"
 )
 
 
@@ -184,6 +214,105 @@ def test_fetch_outrider_template_calls_gh_api_without_double_prefix(monkeypatch)
     assert captured["args"][0] != "api"
     assert captured["args"][0].startswith("repos/remyxai/outrider/contents/")
     assert "ref=v1" in captured["args"][0]
+
+
+# ─── optional per-stage model overrides ─────────────────────────────────────
+
+def test_provider_inference_and_uses_zai():
+    assert outrider_local._provider_for_model("glm-5.2") == "zai"
+    assert outrider_local._provider_for_model("glm-4.6") == "zai"
+    assert outrider_local._provider_for_model("claude-opus-4-8") == "anthropic"
+    assert outrider_local.uses_zai(None, "glm-5.2", None) is True
+    assert outrider_local.uses_zai("claude-haiku-4-5", None, "claude-opus-4-8") is False
+
+
+def test_drafter_model_default_leaves_template_untouched():
+    """No --drafter-model → single-provider default preserved (Anthropic key,
+    Haiku model, no z.ai base URL)."""
+    with patch.object(outrider_local, "_fetch_outrider_template",
+                      return_value=_FAKE_DRAFTER_TEMPLATE):
+        wf = outrider_local._render_drafter_workflow("uuid")
+    assert "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}" in wf
+    assert "ANTHROPIC_MODEL: claude-haiku-4-5" in wf
+    assert "model-base-url" not in wf
+
+
+def test_drafter_model_glm_routes_at_zai():
+    """--drafter-model glm-5.2 swaps to Bearer auth (ZAI_API_KEY), sets the GLM
+    model + z.ai base URL, and drops ANTHROPIC_API_KEY (mutual exclusion)."""
+    with patch.object(outrider_local, "_fetch_outrider_template",
+                      return_value=_FAKE_DRAFTER_TEMPLATE):
+        wf = outrider_local._render_drafter_workflow("uuid", model="glm-5.2")
+    assert "ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}" in wf
+    assert "ANTHROPIC_API_KEY:" not in wf
+    assert "ANTHROPIC_MODEL: glm-5.2" in wf
+    assert "model-base-url: https://api.z.ai/api/anthropic" in wf
+
+
+def test_drafter_model_anthropic_keeps_key_only_swaps_model():
+    """A non-default Anthropic model swaps only the model — keeps x-api-key auth,
+    no z.ai routing."""
+    with patch.object(outrider_local, "_fetch_outrider_template",
+                      return_value=_FAKE_DRAFTER_TEMPLATE):
+        wf = outrider_local._render_drafter_workflow("uuid", model="claude-sonnet-4-6")
+    assert "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}" in wf
+    assert "ANTHROPIC_MODEL: claude-sonnet-4-6" in wf
+    assert "model-base-url" not in wf
+
+
+def test_refiner_gap_model_glm_and_refine_dispatch():
+    """--refiner-model glm-5.2 routes the gap-analysis call at z.ai (endpoint +
+    Bearer + ZAI env); --refine-model flips the dispatch model + provider."""
+    with patch.object(outrider_local, "_fetch_outrider_template",
+                      return_value=_FAKE_REFINER_TEMPLATE):
+        wf = outrider_local._render_refiner_workflow(
+            gap_model="glm-5.2", refine_model="glm-4.6",
+        )
+    # gap-analysis routed at z.ai
+    assert "https://api.z.ai/api/anthropic/v1/messages" in wf
+    assert '"model": "glm-5.2"' in wf
+    assert "Bearer {os.environ['ZAI_API_KEY']}" in wf
+    assert "ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}" in wf
+    # dispatched refine run flipped to GLM/zai
+    assert "-f model=glm-4.6" in wf
+    assert "-f provider=zai" in wf
+
+
+def test_refiner_default_leaves_template_untouched():
+    with patch.object(outrider_local, "_fetch_outrider_template",
+                      return_value=_FAKE_REFINER_TEMPLATE):
+        wf = outrider_local._render_refiner_workflow()
+    assert "https://api.anthropic.com/v1/messages" in wf
+    assert '"model": "claude-sonnet-4-6"' in wf
+    assert "-f model=claude-opus-4-8" in wf and "-f provider=anthropic" in wf
+
+
+def test_refine_model_anthropic_keeps_provider_anthropic():
+    with patch.object(outrider_local, "_fetch_outrider_template",
+                      return_value=_FAKE_REFINER_TEMPLATE):
+        wf = outrider_local._render_refiner_workflow(refine_model="claude-opus-4-8")
+    assert "-f model=claude-opus-4-8" in wf and "-f provider=anthropic" in wf
+
+
+def test_model_override_anchor_guard_fails_loud():
+    """A template that lost the ANTHROPIC_MODEL anchor must raise, not silently
+    skip the override."""
+    broken = _FAKE_DRAFTER_TEMPLATE.replace("ANTHROPIC_MODEL: claude-haiku-4-5\n", "")
+    with patch.object(outrider_local, "_fetch_outrider_template", return_value=broken):
+        with pytest.raises(click.ClickException, match="no longer contains the expected anchor"):
+            outrider_local._render_drafter_workflow("uuid", model="glm-5.2")
+
+
+def test_model_flags_require_two_tier(monkeypatch):
+    """--drafter-model without --two-tier is a usage error."""
+    monkeypatch.setenv("REMYXAI_API_KEY", "rk")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ak")
+    with pytest.raises(click.UsageError, match="require --two-tier"):
+        outrider_local.handle_outrider_setup_local(
+            repo="o/r", interest_id="uuid", auto_interest=False, mode="review",
+            anthropic_key=None, skip_confirm=True, dry_run=True,
+            two_tier=False, drafter_model="glm-5.2",
+        )
 
 
 # ─── gh secret stdin invariant ───────────────────────────────────────────────

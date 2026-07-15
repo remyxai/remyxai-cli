@@ -434,6 +434,102 @@ _OUTRIDER_SELF_INTEREST_ID = "29ca03e7-454d-446c-9941-32c96c53d95d"
 _LOCAL_ACTION_USES = "uses: ./"
 _PUBLISHED_ACTION_USES = f"uses: {_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF}"
 
+# ─── optional per-stage model overrides ─────────────────────────────────────
+#
+# By default the two-tier templates are single-provider (all three stages run
+# on Anthropic) so an install needs only ANTHROPIC_API_KEY. The optional
+# --drafter-model / --refiner-model / --refine-model flags let a caller retune
+# any stage — including routing it at z.ai's GLM — without hand-editing the
+# installed workflow files. Provider is inferred from the model name: GLM
+# models route at z.ai (Bearer auth via ZAI_API_KEY), everything else stays on
+# Anthropic. See remyxai/outrider docs/backends.md for the routing details.
+
+_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
+
+# Structural anchors in the @v1 templates that the overrides rewrite. Kept as
+# explicit constants so a template shape change fails loud (matching the
+# interest-id / uses-./ guards) rather than silently skipping a rewrite.
+_DRAFTER_ANTHROPIC_ENV = "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}"
+_DRAFTER_ZAI_ENV = "ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}"
+_DRAFTER_PUBLISH_ANCHOR = "publish: branch"
+_GAP_ANTHROPIC_URL = '"https://api.anthropic.com/v1/messages"'
+_GAP_ZAI_URL = '"https://api.z.ai/api/anthropic/v1/messages"'
+_GAP_ANTHROPIC_AUTH = '"x-api-key": os.environ["ANTHROPIC_API_KEY"],'
+_GAP_ZAI_AUTH = '"Authorization": f"Bearer {os.environ[\'ZAI_API_KEY\']}",'
+_GAP_ENV_ANCHOR = "REPO: ${{ github.repository }}"
+
+
+def _provider_for_model(model: str) -> str:
+    """Infer the backend provider from a model name. GLM models route at z.ai;
+    everything else (claude-*) uses the default Anthropic API."""
+    return "zai" if model.lower().startswith("glm") else "anthropic"
+
+
+def uses_zai(*models) -> bool:
+    """True if any supplied (non-empty) model resolves to the z.ai provider —
+    i.e. the install needs a ZAI_API_KEY secret."""
+    return any(m and _provider_for_model(m) == "zai" for m in models)
+
+
+def _require_anchor(text: str, anchor: str, what: str) -> None:
+    if anchor not in text:
+        raise click.ClickException(
+            f"{what} template on {_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF} "
+            f"no longer contains the expected anchor ({anchor!r}); template format "
+            f"may have changed. CLI needs an update (or drop the model override)."
+        )
+
+
+def _apply_drafter_model(text: str, model: str) -> str:
+    """Rewrite the drafter's model (and, for GLM, its provider auth + base URL)."""
+    import re
+    _require_anchor(text, "ANTHROPIC_MODEL:", "drafter")
+    text = re.sub(r"(?m)^(\s*)ANTHROPIC_MODEL:.*$", rf"\g<1>ANTHROPIC_MODEL: {model}", text)
+    if _provider_for_model(model) == "zai":
+        # z.ai needs Bearer auth; ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN are
+        # mutually exclusive, so swap the env var rather than adding one.
+        _require_anchor(text, _DRAFTER_ANTHROPIC_ENV, "drafter")
+        _require_anchor(text, _DRAFTER_PUBLISH_ANCHOR, "drafter")
+        text = text.replace(_DRAFTER_ANTHROPIC_ENV, _DRAFTER_ZAI_ENV)
+        text = text.replace(
+            _DRAFTER_PUBLISH_ANCHOR,
+            f"{_DRAFTER_PUBLISH_ANCHOR}\n          model-base-url: {_ZAI_BASE_URL}",
+            1,
+        )
+    return text
+
+
+def _apply_refiner_gap_model(text: str, model: str) -> str:
+    """Rewrite the refiner's gap-analysis LLM call (model, and for GLM the
+    endpoint + Bearer auth + ZAI_API_KEY step env)."""
+    import re
+    _require_anchor(text, '"model":', "refiner")
+    text = re.sub(r'"model": "[^"]*"', f'"model": "{model}"', text, count=1)
+    if _provider_for_model(model) == "zai":
+        _require_anchor(text, _GAP_ANTHROPIC_URL, "refiner")
+        _require_anchor(text, _GAP_ANTHROPIC_AUTH, "refiner")
+        _require_anchor(text, _GAP_ENV_ANCHOR, "refiner")
+        text = text.replace(_GAP_ANTHROPIC_URL, _GAP_ZAI_URL)
+        text = text.replace(_GAP_ANTHROPIC_AUTH, _GAP_ZAI_AUTH)
+        text = text.replace(
+            _GAP_ENV_ANCHOR,
+            f"{_GAP_ENV_ANCHOR}\n          ZAI_API_KEY: ${{{{ secrets.ZAI_API_KEY }}}}",
+            1,
+        )
+    return text
+
+
+def _apply_refine_dispatch_model(text: str, model: str) -> str:
+    """Rewrite the model + provider the refiner dispatches for the final run.
+    The installed runner already maps provider=zai → z.ai base URL, so only the
+    two dispatch flags need changing here."""
+    import re
+    _require_anchor(text, "-f model=", "refiner")
+    _require_anchor(text, "-f provider=", "refiner")
+    text = re.sub(r"-f model=\S+", f"-f model={model}", text, count=1)
+    text = re.sub(r"-f provider=\S+", f"-f provider={_provider_for_model(model)}", text, count=1)
+    return text
+
 
 def _fetch_outrider_template(path: str) -> str:
     """Fetch a workflow-template file from remyxai/outrider@v1 via `gh api`.
@@ -459,10 +555,14 @@ def _fetch_outrider_template(path: str) -> str:
     return base64.b64decode(content_b64).decode()
 
 
-def _render_drafter_workflow(interest_id: str) -> str:
+def _render_drafter_workflow(interest_id: str, model: Optional[str] = None) -> str:
     """Drafter template — fetched live from remyxai/outrider@v1 with the
     self-test interest-id rewritten to the customer's and the local action
-    reference (``uses: ./``) rewritten to the published action ref."""
+    reference (``uses: ./``) rewritten to the published action ref.
+
+    ``model`` (optional) retunes the drafter's model; a GLM model also switches
+    it to z.ai Bearer auth. Omitted → the template's single-provider default.
+    """
     raw = _fetch_outrider_template(_DRAFTER_TEMPLATE_PATH)
     if _OUTRIDER_SELF_INTEREST_ID not in raw:
         raise click.ClickException(
@@ -477,19 +577,33 @@ def _render_drafter_workflow(interest_id: str) -> str:
             f"no longer references the action via '{_LOCAL_ACTION_USES}'; template "
             f"format may have changed. CLI needs an update."
         )
-    return (
+    out = (
         raw.replace(_OUTRIDER_SELF_INTEREST_ID, interest_id)
            .replace(_LOCAL_ACTION_USES, _PUBLISHED_ACTION_USES)
     )
+    if model:
+        out = _apply_drafter_model(out, model)
+    return out
 
 
-def _render_refiner_workflow() -> str:
-    """Refiner template — fetched live from remyxai/outrider@v1 verbatim.
+def _render_refiner_workflow(
+    gap_model: Optional[str] = None, refine_model: Optional[str] = None,
+) -> str:
+    """Refiner template — fetched live from remyxai/outrider@v1.
 
     The refiner has no interest-id substitution point; it dispatches
     outrider.yml (via workflow_dispatch) which reads its own interest-id.
+
+    ``gap_model`` (optional) retunes the gap-analysis LLM call; ``refine_model``
+    (optional) retunes the model/provider the refiner dispatches for the final
+    refinement run. Both omitted → the template's single-provider defaults.
     """
-    return _fetch_outrider_template(_REFINER_TEMPLATE_PATH)
+    out = _fetch_outrider_template(_REFINER_TEMPLATE_PATH)
+    if gap_model:
+        out = _apply_refiner_gap_model(out, gap_model)
+    if refine_model:
+        out = _apply_refine_dispatch_model(out, refine_model)
+    return out
 
 
 # ─── main handler ──────────────────────────────────────────────────────────
@@ -498,6 +612,7 @@ def handle_outrider_setup_local(
     repo, interest_id, auto_interest, mode,
     anthropic_key, skip_confirm, dry_run, no_cron=False, no_cocoindex=False,
     two_tier=False,
+    drafter_model=None, refiner_model=None, refine_model=None, zai_key=None,
 ):
     """Self-provision Outrider with the user's own gh token (no Remyx App).
 
@@ -519,6 +634,13 @@ def handle_outrider_setup_local(
             "--interest and --auto-interest are mutually exclusive."
         )
 
+    # Per-stage model overrides only apply to the two-tier drafter/refiner.
+    if (drafter_model or refiner_model or refine_model) and not two_tier:
+        raise click.UsageError(
+            "--drafter-model / --refiner-model / --refine-model require --two-tier."
+        )
+    need_zai = uses_zai(drafter_model, refiner_model, refine_model)
+
     # 1. REMYX key (set as a repo secret + used to resolve the interest)
     remyx_key = os.environ.get("REMYXAI_API_KEY") or click.prompt(
         "REMYXAI_API_KEY (from engine.remyx.ai Settings)", hide_input=True
@@ -535,6 +657,19 @@ def handle_outrider_setup_local(
     if not anthropic_key.strip():
         raise click.ClickException("ANTHROPIC_API_KEY is required for the workflow.")
 
+    # 2b. z.ai key — only when a stage was routed at GLM (set as a repo secret).
+    if need_zai:
+        zai_key = zai_key or os.environ.get("ZAI_API_KEY") or os.environ.get("Z_AI_KEY")
+        if not zai_key:
+            zai_key = click.prompt(
+                "ZAI_API_KEY (z.ai GLM Coding Plan) — a GLM model was selected",
+                hide_input=True,
+            )
+        if not zai_key.strip():
+            raise click.ClickException(
+                "ZAI_API_KEY is required when any stage uses a GLM model."
+            )
+
     # 3. Repo
     resolved_repo = _normalize_repo(repo) if repo else _detect_github_repo_from_cwd()
     if not resolved_repo:
@@ -548,13 +683,17 @@ def handle_outrider_setup_local(
     click.echo("Plan (no Remyx GitHub App — uses your gh credentials):")
     click.echo(f"  - Repo:      {resolved_repo}")
     click.echo(f"  - Mode:      {mode} (auto = open + merge PR + dispatch; review = open PR only)")
-    click.echo(f"  - Secrets:   REMYX_API_KEY, ANTHROPIC_API_KEY")
+    secrets_line = "REMYX_API_KEY, ANTHROPIC_API_KEY" + (", ZAI_API_KEY" if need_zai else "")
+    click.echo(f"  - Secrets:   {secrets_line}")
     click.echo("  - PR auth:   enable the repo 'Actions can create PRs' setting "
                "(PRs by github-actions[bot])")
     if two_tier:
+        drafter_desc = f"model={drafter_model} ({_provider_for_model(drafter_model)})" if drafter_model else "Haiku 4.5"
+        refiner_desc = f"gap={refiner_model} ({_provider_for_model(refiner_model)})" if refiner_model else "Sonnet gap-analysis"
+        refine_desc = f"model={refine_model} ({_provider_for_model(refine_model)})" if refine_model else "dispatches Opus"
         click.echo(f"  - Writes:    {WORKFLOW_PATH} (manual dispatch, no cron)")
-        click.echo(f"               {DRAFTER_WORKFLOW_PATH} (daily drafter, Haiku 4.5, publish=branch)")
-        click.echo(f"               {REFINER_WORKFLOW_PATH} (weekly refiner, picks + gap-gens + dispatches Opus)")
+        click.echo(f"               {DRAFTER_WORKFLOW_PATH} (daily drafter, {drafter_desc}, publish=branch)")
+        click.echo(f"               {REFINER_WORKFLOW_PATH} (weekly refiner, {refiner_desc}, {refine_desc})")
         click.echo("               (three files on a branch → one PR — templates fetched live from remyxai/outrider@v1)")
         click.secho("  - Note:      forks don't run scheduled workflows — the daily/weekly "
                     "crons need an external dispatcher on a fork (workflow_dispatch is unaffected).",
@@ -570,9 +709,11 @@ def handle_outrider_setup_local(
                 "<interest-id>", no_cron=True, no_cocoindex=no_cocoindex,
             ))
             click.echo("\n--- rendered outrider-daily.yml (drafter) ---")
-            click.echo(_render_drafter_workflow("<interest-id>"))
+            click.echo(_render_drafter_workflow("<interest-id>", model=drafter_model))
             click.echo("\n--- rendered outrider-weekly-refine.yml (refiner) ---")
-            click.echo(_render_refiner_workflow())
+            click.echo(_render_refiner_workflow(
+                gap_model=refiner_model, refine_model=refine_model,
+            ))
         else:
             click.echo("--- rendered workflow ---")
             click.echo(_render_local_workflow(
@@ -630,14 +771,16 @@ def handle_outrider_setup_local(
         click.echo(f"✓ Wrote {WORKFLOW_PATH}")
 
         if two_tier:
-            drafter_yml = _render_drafter_workflow(resolved_interest)
+            drafter_yml = _render_drafter_workflow(resolved_interest, model=drafter_model)
             _gh_put_file(
                 resolved_repo, branch_name, DRAFTER_WORKFLOW_PATH, drafter_yml,
                 "Install Outrider two-tier drafter (self-provisioned)",
             )
             click.echo(f"✓ Wrote {DRAFTER_WORKFLOW_PATH}")
 
-            refiner_yml = _render_refiner_workflow()
+            refiner_yml = _render_refiner_workflow(
+                gap_model=refiner_model, refine_model=refine_model,
+            )
             _gh_put_file(
                 resolved_repo, branch_name, REFINER_WORKFLOW_PATH, refiner_yml,
                 "Install Outrider two-tier refiner (self-provisioned)",
@@ -679,6 +822,9 @@ def handle_outrider_setup_local(
         click.echo("✓ Set REMYX_API_KEY")
         _gh_set_secret(resolved_repo, "ANTHROPIC_API_KEY", anthropic_key)
         click.echo("✓ Set ANTHROPIC_API_KEY")
+        if need_zai:
+            _gh_set_secret(resolved_repo, "ZAI_API_KEY", zai_key)
+            click.echo("✓ Set ZAI_API_KEY")
     except Exception as e:
         if pr_number is not None:
             click.echo(f"  ↩ rolling back: closing PR #{pr_number}", err=True)
