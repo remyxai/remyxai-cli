@@ -209,6 +209,46 @@ def _gh_dispatch(repo: str, branch: str) -> bool:
     return r.returncode == 0
 
 
+# ─── backend registry ──────────────────────────────────────────────────────
+#
+# One entry per Anthropic-Messages-compat backend the Outrider action's
+# `provider` input recognizes (added in outrider v1.7.29). The registry
+# drives (a) which secret env var to prompt/read for the selected backend,
+# (b) the generated workflow's per-backend defaults (model, claude-timeout),
+# and (c) the workflow_dispatch `provider` choice list.
+#
+# Adding a new backend here + wiring the same name in the outrider action's
+# `provider` case-switch is the complete change to add support — no
+# per-vendor CLI flags added by convention (existing --anthropic-key /
+# --zai-key are preserved for backward compat).
+_BACKEND_REGISTRY: dict = {
+    "anthropic": {
+        "secret_env": "ANTHROPIC_API_KEY",
+        "default_model": "claude-opus-4-8",
+        "default_claude_timeout": "900",
+        "display_name": "Anthropic",
+    },
+    "zai": {
+        "secret_env": "ZAI_API_KEY",
+        "default_model": "glm-5.2",
+        # glm-5.2's thinking mode adds per-turn latency similar to Kimi's
+        # kimi-k3; bumped from the historical 900s default to give the
+        # coding session enough headroom before hitting claude-timeout.
+        "default_claude_timeout": "3600",
+        "display_name": "z.ai (GLM)",
+    },
+    "moonshot": {
+        "secret_env": "MOONSHOT_API_KEY",
+        "default_model": "kimi-k3",
+        # Kimi's thinking-mode kimi-k3 runs slower per turn than Anthropic
+        # Opus; the bumped default matches the recommended value in the
+        # outrider action's docs/backends.md table.
+        "default_claude_timeout": "3600",
+        "display_name": "Moonshot (Kimi)",
+    },
+}
+
+
 # ─── workflow rendering (inline; no Remyx App / bot-token step) ─────────────
 
 _COCOINDEX_STEPS_BLOCK = """      # Attach cocoindex-code as a Claude Code skill so the Outrider agent
@@ -254,6 +294,7 @@ def _render_local_workflow(
     interest_id: str,
     no_cron: bool = False,
     no_cocoindex: bool = False,
+    backend: str = "anthropic",
 ) -> str:
     # No github-token input → the action uses this repo's built-in
     # GITHUB_TOKEN, which setup-local authorizes to open PRs.
@@ -266,6 +307,24 @@ def _render_local_workflow(
     # extra steps that install cocoindex-code and write an ENVIRONMENTS.md
     # advertising it — see outrider's docs/environments.md for why this is
     # the recommended default.
+    #
+    # ``backend`` picks the default value of the workflow_dispatch ``provider``
+    # input (anthropic / zai / moonshot) and the corresponding default
+    # ``claude-timeout``. Per-dispatch switching stays available: users can
+    # dispatch with a different ``provider`` as long as the corresponding
+    # secret is set on the repo (setup-local writes only the selected backend's
+    # secret; add others via ``gh secret set`` for cross-backend dispatch).
+    if backend not in _BACKEND_REGISTRY:
+        raise ValueError(
+            f"unknown backend {backend!r}; must be one of: "
+            f"{sorted(_BACKEND_REGISTRY)}"
+        )
+    reg = _BACKEND_REGISTRY[backend]
+    default_timeout = reg["default_claude_timeout"]
+    provider_options = "\n".join(
+        f"          - {name}" for name in _BACKEND_REGISTRY
+    )
+
     if no_cron:
         schedule_block = (
             "  # schedule:\n"
@@ -288,32 +347,30 @@ on:
 {schedule_block}  workflow_dispatch:
     inputs:
       provider:
-        description: 'Which model provider to route Claude Code at. anthropic = default api.anthropic.com; zai = z.ai (GLM family).'
+        description: 'Which model provider to route Claude Code at. The action (v1.7.29+) picks the matching secret + base URL from its internal backend registry.'
         type: choice
         required: false
-        default: 'anthropic'
+        default: '{backend}'
         options:
-          - anthropic
-          - zai
+{provider_options}
       model:
-        description: 'Specific model name to request from the provider (e.g. claude-opus-4-7, glm-5.2, glm-4.6). Empty = let the provider pick its default.'
+        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.2, kimi-k3). Empty = provider default.'
         required: false
         default: ''
       search-method:
-        description: 'Optional free-text method query (e.g. "riemannian preconditioning LoRA"). Runs an engine search and implements the top hit. Use for exploratory dispatches.'
+        description: 'Optional free-text method query. Runs an engine search and implements the top hit.'
         required: false
         default: ''
       pin-arxiv:
-        description: 'Optional exact arxiv_id (e.g. 2402.02347v3). Bypasses selection and implements this specific paper. Use for reproducible re-runs.'
+        description: 'Optional exact arxiv_id. Bypasses selection and implements this specific paper.'
         required: false
         default: ''
       # The five inputs below let outrider-weekly-refine.yml (the refiner)
       # dispatch this runner: it pins the picked draft branch (start-from-ref),
       # pipes a gap analysis in (lead-content), turns on staged synthesis, and
-      # selects mode/publish. Defaults match the action's own, so scheduled and
-      # manual runs are unchanged.
+      # selects mode/publish.
       mode:
-        description: 'Run mode. recommend (default) runs the full scout→implement flow; the refiner dispatches recommend against a pinned paper + start-from-ref.'
+        description: 'Run mode. recommend (default) runs the full scout→implement flow.'
         required: false
         default: 'recommend'
       publish:
@@ -321,21 +378,21 @@ on:
         required: false
         default: 'pr'
       start-from-ref:
-        description: 'Optional base branch to build on top of (the refiner passes the picked drafter branch here). Empty = start from the default branch.'
+        description: 'Optional base branch to build on top of (the refiner passes the picked drafter branch here).'
         required: false
         default: ''
       lead-content:
-        description: 'Optional inline markdown (e.g. a gap analysis) fed to the agent as leading context. Used by the refiner dispatch.'
+        description: 'Optional inline markdown (e.g. a gap analysis) fed to the agent as leading context.'
         required: false
         default: ''
       staged-synthesis:
-        description: 'Enable the multi-pass staged-synthesis flow (the refiner sets true). Empty/false = single-pass.'
+        description: 'Enable the multi-pass staged-synthesis flow (the refiner sets true).'
         required: false
         default: 'false'
       claude-timeout:
-        description: 'Wall-clock seconds for the Claude Code agent calls (preflight + implementation). Raise for very large monorepos; lower to cap cost.'
+        description: 'Wall-clock seconds for the Claude Code agent calls. Threads through every phase (selection, deep-search, preflight, audit, implementation, self-review).'
         required: false
-        default: '900'
+        default: '{default_timeout}'
 
 jobs:
   recommend:
@@ -345,60 +402,38 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-    env:
-      REMYX_API_KEY: ${{{{ secrets.REMYX_API_KEY }}}}
-      # ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL are
-      # written to $GITHUB_ENV by the "Configure provider auth" step
-      # below (auth env vars are mutually exclusive — non-Anthropic
-      # providers require Bearer auth via AUTH_TOKEN and reject the
-      # x-api-key path; ANTHROPIC_MODEL is optional and only set
-      # when the workflow_dispatch input is non-empty).
     steps:
-      # Per-dispatch provider + model routing. Default cron runs hit
-      # Anthropic (inputs.provider defaults to 'anthropic'); dispatch
-      # with `provider=zai` to route one run at z.ai's endpoint.
-      - name: Configure provider auth
-        shell: bash
-        env:
-          ANTHROPIC_API_KEY_SECRET: ${{{{ secrets.ANTHROPIC_API_KEY }}}}
-          ZAI_API_KEY_SECRET: ${{{{ secrets.ZAI_API_KEY }}}}
-          MODEL_INPUT: ${{{{ inputs.model }}}}
-        run: |
-          if [ "${{{{ inputs.provider }}}}" = "zai" ]; then
-            echo "ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY_SECRET" >> "$GITHUB_ENV"
-          else
-            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY_SECRET" >> "$GITHUB_ENV"
-          fi
-          if [ -n "$MODEL_INPUT" ]; then
-            echo "ANTHROPIC_MODEL=$MODEL_INPUT" >> "$GITHUB_ENV"
-          fi
 {cocoindex_steps}      - uses: remyxai/outrider@v1
+        env:
+          # Every registered backend's secret is referenced. The action's
+          # Configure step (outrider v1.7.29+) reads only the one matching
+          # `provider`; the rest are ignored. Missing secrets evaluate to
+          # empty strings, and the Configure step fails clean with a specific
+          # ::error:: if the caller selects a provider whose secret isn't set.
+          REMYX_API_KEY: ${{{{ secrets.REMYX_API_KEY }}}}
+          ANTHROPIC_API_KEY: ${{{{ secrets.ANTHROPIC_API_KEY }}}}
+          ZAI_API_KEY: ${{{{ secrets.ZAI_API_KEY }}}}
+          MOONSHOT_API_KEY: ${{{{ secrets.MOONSHOT_API_KEY }}}}
         with:
           interest-id: {interest_id}
-          # Minimum days between recommendation PRs on this repo. '0' lets
-          # every scheduled or manually-triggered run open a PR; raise it
-          # (e.g. '7') to cap how often Outrider posts.
+          # Minimum days between recommendation PRs. '0' lets every run open
+          # a PR; raise (e.g. '7') to cap cadence.
           rate-limit-days: '0'
-          # Forwarded from the workflow_dispatch inputs above so
-          # `remyxai outrider trigger` (or a manual gh-workflow-run)
-          # can pin a paper, extend the implementation timeout, or
-          # route at an alternate provider per dispatch. Empty on
-          # scheduled runs — the action uses its own defaults.
+          # Forwarded from workflow_dispatch inputs so manual `gh workflow
+          # run` dispatches can pin a paper, switch backends per-dispatch,
+          # extend the implementation timeout, etc.
+          provider: ${{{{ inputs.provider }}}}
+          model: ${{{{ inputs.model }}}}
           search-method: ${{{{ inputs.search-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
           claude-timeout: ${{{{ inputs.claude-timeout }}}}
           # Forwarded so outrider-weekly-refine.yml can dispatch a refinement
-          # run (mode + start-from-ref + lead-content + staged-synthesis) and
-          # so the drafter/manual runs can pick pr vs branch publishing.
+          # run (mode + start-from-ref + lead-content + staged-synthesis).
           mode: ${{{{ inputs.mode }}}}
           publish: ${{{{ inputs.publish }}}}
           start-from-ref: ${{{{ inputs.start-from-ref }}}}
           lead-content: ${{{{ inputs.lead-content }}}}
           staged-synthesis: ${{{{ inputs.staged-synthesis }}}}
-          # Maps provider name → base URL. Adding more providers here
-          # extends the table (Bedrock / Vertex / on-prem); leave
-          # empty on the default Anthropic path.
-          model-base-url: ${{{{ inputs.provider == 'zai' && 'https://api.z.ai/api/anthropic' || '' }}}}
 """
 
 
@@ -613,6 +648,7 @@ def handle_outrider_setup_local(
     anthropic_key, skip_confirm, dry_run, no_cron=False, no_cocoindex=False,
     two_tier=False,
     drafter_model=None, refiner_model=None, refine_model=None, zai_key=None,
+    backend="anthropic",
 ):
     """Self-provision Outrider with the user's own gh token (no Remyx App).
 
@@ -626,12 +662,33 @@ def handle_outrider_setup_local(
 
     ``--two-tier`` currently opts in — it's a strict superset of the
     legacy single-file install, and existing installs are unaffected.
+
+    ``backend`` selects which Anthropic-Messages-compat backend the
+    single-file setup routes at by default (anthropic / zai / moonshot).
+    Only the selected backend's secret is prompted + written; users who
+    want per-dispatch backend switching add other secrets manually via
+    ``gh secret set``. ``backend`` is scoped to the single-file path —
+    two-tier setups route per-stage via ``--drafter-model`` etc. and
+    reject a non-anthropic ``--backend`` as ambiguous.
     """
     import os
 
     if interest_id and auto_interest:
         raise click.UsageError(
             "--interest and --auto-interest are mutually exclusive."
+        )
+
+    if backend not in _BACKEND_REGISTRY:
+        raise click.UsageError(
+            f"unknown --backend {backend!r}; must be one of: "
+            f"{', '.join(sorted(_BACKEND_REGISTRY))}"
+        )
+    if two_tier and backend != "anthropic":
+        raise click.UsageError(
+            "--backend is scoped to the single-file setup; --two-tier "
+            "ignores it. Use --drafter-model / --refiner-model / "
+            "--refine-model to route two-tier stages at non-Anthropic "
+            "backends."
         )
 
     # Per-stage model overrides only apply to the two-tier drafter/refiner.
@@ -648,27 +705,63 @@ def handle_outrider_setup_local(
     if not remyx_key.strip():
         raise click.ClickException("REMYXAI_API_KEY is required.")
 
-    # 2. Anthropic key (set as a repo secret; the engine isn't involved here)
-    anthropic_key = anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not anthropic_key:
-        anthropic_key = click.prompt(
-            "ANTHROPIC_API_KEY (from console.anthropic.com)", hide_input=True
-        )
-    if not anthropic_key.strip():
-        raise click.ClickException("ANTHROPIC_API_KEY is required for the workflow.")
-
-    # 2b. z.ai key — only when a stage was routed at GLM (set as a repo secret).
-    if need_zai:
-        zai_key = zai_key or os.environ.get("ZAI_API_KEY") or os.environ.get("Z_AI_KEY")
-        if not zai_key:
-            zai_key = click.prompt(
-                "ZAI_API_KEY (z.ai GLM Coding Plan) — a GLM model was selected",
-                hide_input=True,
+    # 2. Backend secret resolution.
+    #
+    # Two-tier keeps its historical behavior: Anthropic key is mandatory
+    # (drafter defaults to Haiku 4.5), zai key is prompted only when
+    # `need_zai` (a stage was routed at GLM).
+    #
+    # Single-file path resolves ONE backend's secret — the selected
+    # `backend` — from (in order) the legacy CLI flag if it matches the
+    # backend name, the registry-declared env var, or an interactive
+    # prompt. `moonshot` has no legacy flag and is env-or-prompt.
+    if two_tier:
+        anthropic_key = anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not anthropic_key:
+            anthropic_key = click.prompt(
+                "ANTHROPIC_API_KEY (from console.anthropic.com)", hide_input=True
             )
-        if not zai_key.strip():
+        if not anthropic_key.strip():
             raise click.ClickException(
-                "ZAI_API_KEY is required when any stage uses a GLM model."
+                "ANTHROPIC_API_KEY is required for the workflow."
             )
+        if need_zai:
+            zai_key = zai_key or os.environ.get("ZAI_API_KEY") or os.environ.get("Z_AI_KEY")
+            if not zai_key:
+                zai_key = click.prompt(
+                    "ZAI_API_KEY (z.ai GLM Coding Plan) — a GLM model was selected",
+                    hide_input=True,
+                )
+            if not zai_key.strip():
+                raise click.ClickException(
+                    "ZAI_API_KEY is required when any stage uses a GLM model."
+                )
+        backend_secret_env = "ANTHROPIC_API_KEY"
+        backend_secret_value = anthropic_key
+    else:
+        reg = _BACKEND_REGISTRY[backend]
+        backend_secret_env = reg["secret_env"]
+        display = reg["display_name"]
+        legacy_flag_value = {"anthropic": anthropic_key, "zai": zai_key}.get(backend)
+        backend_secret_value = (
+            legacy_flag_value
+            or os.environ.get(backend_secret_env)
+        )
+        if not backend_secret_value:
+            backend_secret_value = click.prompt(
+                f"{backend_secret_env} ({display})", hide_input=True
+            )
+        if not backend_secret_value.strip():
+            raise click.ClickException(
+                f"{backend_secret_env} is required for --backend {backend}."
+            )
+        # Populate historical variables so downstream references remain
+        # consistent (they're only used in the two-tier path today, so this
+        # is defensive but harmless).
+        if backend == "anthropic":
+            anthropic_key = backend_secret_value
+        elif backend == "zai":
+            zai_key = backend_secret_value
 
     # 3. Repo
     resolved_repo = _normalize_repo(repo) if repo else _detect_github_repo_from_cwd()
@@ -683,7 +776,12 @@ def handle_outrider_setup_local(
     click.echo("Plan (no Remyx GitHub App — uses your gh credentials):")
     click.echo(f"  - Repo:      {resolved_repo}")
     click.echo(f"  - Mode:      {mode} (auto = open + merge PR + dispatch; review = open PR only)")
-    secrets_line = "REMYX_API_KEY, ANTHROPIC_API_KEY" + (", ZAI_API_KEY" if need_zai else "")
+    if two_tier:
+        secrets_line = "REMYX_API_KEY, ANTHROPIC_API_KEY" + (", ZAI_API_KEY" if need_zai else "")
+    else:
+        secrets_line = f"REMYX_API_KEY, {backend_secret_env}"
+        if backend != "anthropic":
+            click.echo(f"  - Backend:   {backend} ({_BACKEND_REGISTRY[backend]['display_name']})")
     click.echo(f"  - Secrets:   {secrets_line}")
     click.echo("  - PR auth:   enable the repo 'Actions can create PRs' setting "
                "(PRs by github-actions[bot])")
@@ -718,6 +816,7 @@ def handle_outrider_setup_local(
             click.echo("--- rendered workflow ---")
             click.echo(_render_local_workflow(
                 "<interest-id>", no_cron=no_cron, no_cocoindex=no_cocoindex,
+                backend=backend,
             ))
         click.secho("dry-run: no changes made.", fg="yellow")
         return
@@ -765,6 +864,7 @@ def handle_outrider_setup_local(
             resolved_interest,
             no_cron=(no_cron or two_tier),
             no_cocoindex=no_cocoindex,
+            backend=backend,
         )
         _gh_put_file(resolved_repo, branch_name, WORKFLOW_PATH, workflow,
                      "Install Outrider (self-provisioned via remyxai CLI)")
@@ -820,9 +920,9 @@ def handle_outrider_setup_local(
         # Secrets LAST (closest to success; least cleanup risk).
         _gh_set_secret(resolved_repo, "REMYX_API_KEY", remyx_key)
         click.echo("✓ Set REMYX_API_KEY")
-        _gh_set_secret(resolved_repo, "ANTHROPIC_API_KEY", anthropic_key)
-        click.echo("✓ Set ANTHROPIC_API_KEY")
-        if need_zai:
+        _gh_set_secret(resolved_repo, backend_secret_env, backend_secret_value)
+        click.echo(f"✓ Set {backend_secret_env}")
+        if two_tier and need_zai:
             _gh_set_secret(resolved_repo, "ZAI_API_KEY", zai_key)
             click.echo("✓ Set ZAI_API_KEY")
     except Exception as e:

@@ -740,6 +740,20 @@ def outrider_init(
                   "secret. Only needed when a --*-model selects a GLM model; "
                   "falls back to $ZAI_API_KEY / $Z_AI_KEY, else prompts."
               ))
+@click.option("--backend", "backend",
+              type=click.Choice(["anthropic", "zai", "moonshot"]),
+              default="anthropic", show_default=True,
+              help=(
+                  "Which Anthropic-Messages-compat backend the single-file "
+                  "setup routes at by default. Selects the workflow_dispatch "
+                  "`provider` input's default and the secret setup-local "
+                  "prompts for (only the selected backend's secret is written; "
+                  "add others via `gh secret set` for per-dispatch switching). "
+                  "The generated workflow can still dispatch other backends "
+                  "at run time. Scoped to single-file setup — --two-tier "
+                  "rejects a non-anthropic value (use --drafter-model etc. "
+                  "for per-stage routing there)."
+              ))
 @click.option("--bulk-repos", "bulk_repos", type=click.Path(), default=None,
               help=(
                   "Path to a TSV mapping repos to ResearchInterest UUIDs "
@@ -756,7 +770,7 @@ def outrider_init(
 def outrider_setup_local(
     repo, interest_id, auto_interest, mode, anthropic_key,
     no_cron, no_cocoindex, two_tier, drafter_model, refiner_model, refine_model,
-    zai_key, bulk_repos, pace_s, dry_run, skip_confirm,
+    zai_key, backend, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider WITHOUT the Remyx GitHub App.
@@ -806,6 +820,7 @@ def outrider_setup_local(
                 refiner_model=refiner_model,
                 refine_model=refine_model,
                 zai_key=zai_key,
+                backend=backend,
             ),
             pace_s=pace_s,
         )
@@ -825,6 +840,7 @@ def outrider_setup_local(
         refiner_model=refiner_model,
         refine_model=refine_model,
         zai_key=zai_key,
+        backend=backend,
     )
 
 
