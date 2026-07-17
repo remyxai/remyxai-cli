@@ -25,70 +25,80 @@ def test_render_uses_builtin_github_token():
     assert "rate-limit-days: '0'" in wf                   # don't suppress manual/scheduled runs
 
 
-def test_render_declares_remyx_and_provider_secrets():
-    """REMYX_API_KEY is set as a job-level env var (it's needed across
-    every step); ANTHROPIC_API_KEY and ZAI_API_KEY are accessed via
-    ``secrets.*`` inside the Configure-provider-auth step rather than
-    set unconditionally, so a non-default provider dispatch doesn't
-    get both auth vars set (which Claude Code would resolve in favor
-    of the x-api-key path that non-Anthropic providers reject)."""
+def test_render_declares_all_backend_secrets_on_uses_step():
+    """The action's `env:` block on the uses step passes every registered
+    backend's secret. The action's Configure step (outrider v1.7.29+)
+    reads only the one matching `provider`; missing secrets evaluate to
+    empty and fail clean at dispatch time. REMYX_API_KEY is included in
+    the same block since it's needed for every run."""
     wf = outrider_local._render_local_workflow("uuid")
     assert "REMYX_API_KEY: ${{ secrets.REMYX_API_KEY }}" in wf
-    # Configure step references both Anthropic + z.ai secrets via env.
-    assert "ANTHROPIC_API_KEY_SECRET: ${{ secrets.ANTHROPIC_API_KEY }}" in wf
-    assert "ZAI_API_KEY_SECRET: ${{ secrets.ZAI_API_KEY }}" in wf
-    # The legacy unconditional job-level ANTHROPIC_API_KEY env line is
-    # GONE — its presence would trip the action's startup auth-guard
-    # mutual-exclusion warning on every provider=zai dispatch.
-    assert "      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}" not in wf
+    assert "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}" in wf
+    assert "ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}" in wf
+    assert "MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}" in wf
+    # The old fork-side Configure step is GONE — the action handles auth
+    # wiring via its `provider` input now.
+    assert "Configure provider auth" not in wf
+    assert "ANTHROPIC_API_KEY_SECRET" not in wf
 
 
-def test_render_declares_provider_input_and_configure_step():
-    """Workflow exposes a `provider` workflow_dispatch input + a step
-    that writes the right auth env var to $GITHUB_ENV based on it."""
+def test_render_declares_provider_workflow_input_with_all_backends():
+    """Workflow exposes a `provider` workflow_dispatch input listing every
+    backend registered in _BACKEND_REGISTRY. Dispatches can select any of
+    them at run time; setup-local's --backend controls only the default."""
     wf = outrider_local._render_local_workflow("uuid")
-
-    # workflow_dispatch input declaration
     assert "      provider:" in wf
     assert "type: choice" in wf
-    for opt in ("- anthropic", "- zai"):
-        assert opt in wf, f"missing provider option: {opt}"
+    for name in outrider_local._BACKEND_REGISTRY:
+        assert f"- {name}" in wf, f"missing provider option in workflow: {name}"
+    # Default backend is anthropic when not overridden.
     assert "default: 'anthropic'" in wf
 
-    # Configure provider auth step
-    assert "name: Configure provider auth" in wf
-    # Picks the right env var based on inputs.provider.
-    assert "if [ \"${{ inputs.provider }}\" = \"zai\" ]; then" in wf
-    assert 'echo "ANTHROPIC_AUTH_TOKEN=$ZAI_API_KEY_SECRET" >> "$GITHUB_ENV"' in wf
-    assert 'echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY_SECRET" >> "$GITHUB_ENV"' in wf
 
-
-def test_render_forwards_model_base_url_for_zai_provider():
-    """The action's model-base-url input is set to z.ai's endpoint
-    when provider=zai, empty otherwise (default Anthropic)."""
+def test_render_forwards_provider_and_model_to_action():
+    """Both `provider` and `model` workflow_dispatch inputs are threaded
+    into the action's `with:` block so per-dispatch overrides propagate
+    all the way through — the action's `provider` input drives base-URL +
+    auth wiring; `model` sets ANTHROPIC_MODEL for cost telemetry accuracy."""
     wf = outrider_local._render_local_workflow("uuid")
-    assert (
-        "model-base-url: ${{ inputs.provider == 'zai' "
-        "&& 'https://api.z.ai/api/anthropic' || '' }}"
-    ) in wf
+    assert "provider: ${{ inputs.provider }}" in wf
+    assert "model: ${{ inputs.model }}" in wf
+    # model-base-url is no longer set from the workflow — the action's
+    # `provider` input picks the base URL from its internal map.
+    assert "model-base-url:" not in wf
 
 
-def test_render_declares_model_input_and_configure_step_sets_env():
-    """The `model` workflow_dispatch input lets dispatches pick a
-    specific model (glm-5.2, glm-4.6, claude-opus-4-7, ...). The
-    Configure step writes ANTHROPIC_MODEL=<value> to $GITHUB_ENV
-    when the input is non-empty; the action reads ANTHROPIC_MODEL
-    as part of its env passthrough."""
-    wf = outrider_local._render_local_workflow("uuid")
-    # Input declaration
-    assert "      model:" in wf
-    # Configure step picks it up via env so it doesn't have to be
-    # interpolated into the shell line.
-    assert "MODEL_INPUT: ${{ inputs.model }}" in wf
-    assert 'echo "ANTHROPIC_MODEL=$MODEL_INPUT" >> "$GITHUB_ENV"' in wf
-    # Guard: empty model leaves ANTHROPIC_MODEL unset rather than
-    # writing a blank value into $GITHUB_ENV.
-    assert 'if [ -n "$MODEL_INPUT" ]; then' in wf
+def test_render_backend_moonshot_selects_moonshot_default_and_timeout():
+    """--backend moonshot sets the workflow_dispatch provider default to
+    'moonshot' AND uses moonshot's bumped claude-timeout (3600s per the
+    registry) as the input default."""
+    wf = outrider_local._render_local_workflow("uuid", backend="moonshot")
+    assert "default: 'moonshot'" in wf
+    # Registry-declared timeout for moonshot (kimi-k3 thinking mode).
+    assert "default: '3600'" in wf
+
+
+def test_render_backend_zai_uses_bumped_timeout():
+    """--backend zai also gets the bumped 3600s timeout — glm-5.2's
+    thinking mode adds per-turn latency similar to Kimi's."""
+    wf = outrider_local._render_local_workflow("uuid", backend="zai")
+    assert "default: 'zai'" in wf
+    assert "default: '3600'" in wf
+
+
+def test_render_backend_anthropic_uses_default_timeout_900():
+    """--backend anthropic keeps the historical 900s timeout default —
+    Opus is fast enough per-turn that the default doesn't need bumping."""
+    wf = outrider_local._render_local_workflow("uuid", backend="anthropic")
+    assert "default: 'anthropic'" in wf
+    assert "default: '900'" in wf
+
+
+def test_render_unknown_backend_raises():
+    """A backend not in the registry raises ValueError; caller must catch
+    or the CLI's UsageError handles it upstream."""
+    with pytest.raises(ValueError, match="unknown backend"):
+        outrider_local._render_local_workflow("uuid", backend="bedrock")
 
 
 def test_render_declares_workflow_dispatch_inputs():
