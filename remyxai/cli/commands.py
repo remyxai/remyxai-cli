@@ -593,6 +593,41 @@ def outrider():
                   "(Claude Code). Falls back to $ANTHROPIC_API_KEY. Only used "
                   "if one isn't already connected."
               ))
+@click.option("--single-tier", "single_tier", is_flag=True, default=False,
+              help=(
+                  "Install the plain single-file workflow instead of the "
+                  "default two-tier drafter/refiner setup."
+              ))
+@click.option("--provider", "provider",
+              type=click.Choice(["anthropic", "zai", "moonshot"]),
+              default=None,
+              help=(
+                  "Model provider for BOTH tiers: anthropic (Claude Code), "
+                  "zai (Z.ai), or moonshot (Moonshot AI). Defaults to your "
+                  "connected provider. Override a single tier with "
+                  "--drafter-provider / --refiner-provider."
+              ))
+@click.option("--model", "model", default=None,
+              help=(
+                  "Model id for BOTH tiers (e.g. claude-opus-4-8, glm-5.2, "
+                  "kimi-k3). Defaults to each provider's default model per "
+                  "tier. Override a single tier with --drafter-model / "
+                  "--refiner-model."
+              ))
+@click.option("--drafter-provider", "drafter_provider",
+              type=click.Choice(["anthropic", "zai", "moonshot"]),
+              default=None,
+              help=("Provider for the daily drafter tier only: anthropic | "
+                    "zai | moonshot (two-tier)."))
+@click.option("--drafter-model", "drafter_model", default=None,
+              help="Model id for the daily drafter tier only (two-tier).")
+@click.option("--refiner-provider", "refiner_provider",
+              type=click.Choice(["anthropic", "zai", "moonshot"]),
+              default=None,
+              help=("Provider for the weekly refiner tier only: anthropic | "
+                    "zai | moonshot (two-tier)."))
+@click.option("--refiner-model", "refiner_model", default=None,
+              help="Model id for the weekly refiner tier only (two-tier).")
 @click.option("--no-wait", is_flag=True, default=False,
               help=(
                   "Don't block polling for the App install or provisioning to "
@@ -610,9 +645,15 @@ def outrider():
 @click.option("--dry-run", is_flag=True, default=False,
               help="Print the plan and exit without making any changes.")
 @click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
-              help="Skip the confirmation prompt (default is opt-in).")
+              help=(
+                  "Run non-interactively: skip the 'Proceed?' confirmation and "
+                  "provision right away. Without it, init prints the plan and "
+                  "waits for you to confirm. Use it for scripts / bulk installs."
+              ))
 def outrider_init(
     repo, interest_id, auto_interest, mode, anthropic_key,
+    single_tier, provider, model,
+    drafter_provider, drafter_model, refiner_provider, refiner_model,
     no_wait, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
@@ -624,17 +665,37 @@ def outrider_init(
     — merges it and fires the first run. Your local git is never touched
     and no personal `gh` token is needed; only your REMYXAI_API_KEY.
 
+    By default this installs the **two-tier** setup: a daily *drafter* that
+    explores as fork branches, plus a weekly *refiner* that promotes the
+    strongest draft to a ready-for-review PR (crons off — drive them with
+    `remyxai outrider trigger` or your own dispatcher). Any provider works —
+    anthropic (Claude Code), zai (Z.ai), or moonshot (Moonshot AI), all on
+    equal footing. One `--provider` / `--model` applies to both tiers;
+    `--drafter-*` / `--refiner-*` tune a single tier; unset, a tier follows
+    your connected provider. Pass `--single-tier` for the plain single-file
+    workflow instead.
+
     Requires: the Remyx GitHub App installed on the repo (the command
     surfaces the install link if it isn't) and a connected model provider —
-    connect Claude Code once on engine.remyx.ai/integrations and the CLI
-    uses it automatically. (--anthropic-key / ANTHROPIC_API_KEY is only a
-    one-time fallback if you haven't connected one there yet.)
+    connect one once on engine.remyx.ai/integrations and the CLI uses it
+    automatically. (--anthropic-key / ANTHROPIC_API_KEY is only a one-time
+    inline shortcut if you haven't connected a provider there yet.)
 
     Examples:
 
+      # Two-tier (default), using your connected provider:
       remyxai outrider init --repo remyxai/RepoRanger --auto-interest
 
-      remyxai outrider init --repo owner/name --interest <uuid> --mode review
+      # Two-tier with one provider for both tiers (any of the three):
+      remyxai outrider init --repo owner/name --auto-interest --provider moonshot
+
+      # Two-tier mixing providers per tier (cheap drafter + capable refiner):
+      remyxai outrider init --repo owner/name --auto-interest \\
+        --drafter-provider zai --drafter-model glm-5.2 \\
+        --refiner-provider anthropic
+
+      # Plain single-file workflow:
+      remyxai outrider init --repo owner/name --interest <uuid> --single-tier
 
       remyxai outrider init --bulk-repos repos.tsv --mode review --yes
     """
@@ -652,6 +713,13 @@ def outrider_init(
                 auto_interest=False,
                 mode=mode,
                 anthropic_key=anthropic_key,
+                single_tier=single_tier,
+                provider=provider,
+                model=model,
+                drafter_provider=drafter_provider,
+                drafter_model=drafter_model,
+                refiner_provider=refiner_provider,
+                refiner_model=refiner_model,
                 skip_confirm=skip_confirm,
                 dry_run=dry_run,
                 no_wait=no_wait,
@@ -665,6 +733,13 @@ def outrider_init(
         auto_interest=auto_interest,
         mode=mode,
         anthropic_key=anthropic_key,
+        single_tier=single_tier,
+        provider=provider,
+        model=model,
+        drafter_provider=drafter_provider,
+        drafter_model=drafter_model,
+        refiner_provider=refiner_provider,
+        refiner_model=refiner_model,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
         no_wait=no_wait,

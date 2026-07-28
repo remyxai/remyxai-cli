@@ -50,9 +50,20 @@ UUID_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Anthropic via the `claude_code` integration — the only model provider wired
-# today (the engine's MODEL_PROVIDERS registry is the source of truth).
-MODEL_PROVIDER = "claude_code"
+# Model providers, in the engine's connection-priority order. Each maps its
+# integration id (used by the integrations API) to the workflow provider value
+# the Outrider action + engine phases understand. All providers are equal —
+# this order is only the fallback used when the caller doesn't name one. The
+# engine's MODEL_PROVIDERS registry is the source of truth.
+MODEL_PROVIDERS = [
+    ("claude_code", "anthropic"),   # Claude Code (Anthropic)
+    ("zai", "zai"),                 # Z.ai (GLM)
+    ("moonshot", "moonshot"),       # Moonshot AI (Kimi)
+]
+# `claude_code` is the id the inline --anthropic-key / $ANTHROPIC_API_KEY
+# shortcut connects; it is not a preferred provider, just the one with a
+# key flag on this command today.
+ANTHROPIC_INTEGRATION = "claude_code"
 
 INSTALL_POLL_INTERVAL = 5     # seconds between App-install checks
 INSTALL_POLL_TIMEOUT = 300    # stop waiting for the browser install after 5 min
@@ -198,35 +209,58 @@ def _ensure_app_installed(repo, api_key, no_wait, sleep=time.sleep):
     )
 
 
-def _ensure_model_provider(anthropic_key, api_key):
-    """Ensure a model provider (Anthropic) is connected. Returns True if so.
+def _resolve_connected_provider(api_key):
+    """Workflow value of the first connected model provider (in priority
+    order), or ``None`` when none is connected / status can't be read.
 
-    Non-fatal when absent: provisioning still proceeds, but the first run
-    can't complete until a key is connected — so we warn loudly.
+    Vendor-neutral: returns whatever the user actually connected, so a tier
+    with no explicit provider follows the account's own setup rather than a
+    hardcoded default.
     """
-    try:
-        status = get_integration_status(MODEL_PROVIDER, api_key=api_key)
-    except Exception:
-        status = {"connected": False}
-    if status.get("connected"):
-        click.echo("✓ Model provider (Claude Code) is connected")
+    for integration_id, workflow_value in MODEL_PROVIDERS:
+        try:
+            if get_integration_status(
+                integration_id, api_key=api_key
+            ).get("connected"):
+                return workflow_value
+        except Exception:
+            continue
+    return None
+
+
+def _ensure_model_provider(anthropic_key, api_key):
+    """Ensure *some* model provider is connected. Returns True if so.
+
+    Any provider counts equally — Claude Code (Anthropic), Z.ai, or
+    Moonshot AI. Non-fatal when absent: provisioning still proceeds, but the
+    first run can't complete until a key is connected, so we warn loudly.
+    """
+    connected = _resolve_connected_provider(api_key)
+    if connected:
+        click.echo(f"✓ Model provider connected ({connected})")
         return True
 
+    # No provider connected. The inline --anthropic-key / $ANTHROPIC_API_KEY
+    # shortcut connects an Anthropic key (the only key flag on this command
+    # today); any provider can otherwise be connected in Integrations.
     key = anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         click.secho(
             "⚠ No model provider connected. Provisioning will proceed, but the "
-            "first run can't complete until you connect an Anthropic key "
-            "(pass --anthropic-key, set ANTHROPIC_API_KEY, or connect Claude "
-            "Code in Integrations).",
+            "first run can't complete until you connect one at "
+            "engine.remyx.ai/integrations — Claude Code (Anthropic), Z.ai, or "
+            "Moonshot AI. Shortcut: pass --anthropic-key or set "
+            "ANTHROPIC_API_KEY to connect an Anthropic key inline.",
             fg="yellow",
         )
         return False
     try:
-        connect_credential(MODEL_PROVIDER, {"api_key": key}, api_key=api_key)
+        connect_credential(
+            ANTHROPIC_INTEGRATION, {"api_key": key}, api_key=api_key
+        )
     except Exception as e:
-        raise click.ClickException(f"Failed to connect the Anthropic key: {e}")
-    click.echo("✓ Connected Claude Code (Anthropic) key")
+        raise click.ClickException(f"Failed to connect the provided key: {e}")
+    click.echo("✓ Connected an Anthropic key")
     return True
 
 
@@ -257,9 +291,67 @@ def _wait_for_provision(interest_id, task_id, api_key, sleep=time.sleep):
 
 # ─── main handler ──────────────────────────────────────────────────────────
 
+def _validate_init_tier_flags(single_tier, drafter_provider, drafter_model,
+                              refiner_provider, refiner_model):
+    """Fail fast on incompatible tier flags (before any work / on dry-run)."""
+    if single_tier and any([drafter_provider, drafter_model,
+                            refiner_provider, refiner_model]):
+        raise click.UsageError(
+            "--drafter-* / --refiner-* configure the two-tier setup; "
+            "drop --single-tier to use them."
+        )
+
+
+def _build_init_phases(
+    single_tier, provider, model,
+    drafter_provider, drafter_model,
+    refiner_provider, refiner_model,
+    default_provider=None,
+):
+    """Translate the init tier flags into the engine ``phases`` config.
+
+    Default (no flags): the two-tier setup — a daily *drafter* plus a weekly
+    *refiner*. A tier's provider resolves in order: its own ``--drafter-*`` /
+    ``--refiner-*`` flag → the shared ``--provider`` → ``default_provider``
+    (the caller's connected provider). When none is known the phase leaves
+    ``provider`` unset and the engine uses the connected provider. Every
+    provider is equal here — none is hardcoded. ``single_tier`` opts out to
+    the plain single-file workflow.
+
+    Returns the ``phases`` dict (or ``None`` for a plain single-file install
+    with no per-phase pins).
+    """
+    _validate_init_tier_flags(single_tier, drafter_provider, drafter_model,
+                              refiner_provider, refiner_model)
+    shared_provider = provider or default_provider
+
+    def _tier(tier_provider, tier_model):
+        prov = tier_provider or shared_provider
+        cfg = {"model": tier_model if tier_model is not None else (model or "")}
+        if prov:                       # omit → engine uses the connected provider
+            cfg["provider"] = prov
+        return cfg
+
+    if single_tier:
+        # Plain single-file. Only pin a phase when the caller named a
+        # provider/model; otherwise send nothing and let the engine decide.
+        if provider or model:
+            return {"mode": "single", "main": _tier(None, None)}
+        return None
+
+    return {
+        "mode": "two_tier",
+        "drafter": _tier(drafter_provider, drafter_model),
+        "refiner": _tier(refiner_provider, refiner_model),
+    }
+
+
 def handle_outrider_init(
     repo, interest_id, auto_interest, mode,
     anthropic_key, skip_confirm, dry_run, no_wait,
+    single_tier=False, provider=None, model=None,
+    drafter_provider=None, drafter_model=None,
+    refiner_provider=None, refiner_model=None,
 ):
     """Set up Outrider on a repo via the Remyx engine. Called from
     commands.outrider_init."""
@@ -267,6 +359,12 @@ def handle_outrider_init(
         raise click.UsageError(
             "--interest and --auto-interest are mutually exclusive."
         )
+
+    # Two-tier is the default; single_tier opts out. Validate tier flags now
+    # (fail fast, before any work); the phases config is built at provision
+    # time once the connected provider is known.
+    _validate_init_tier_flags(single_tier, drafter_provider, drafter_model,
+                              refiner_provider, refiner_model)
 
     # 1. API key (the only credential the CLI needs)
     api_key = os.environ.get("REMYXAI_API_KEY") or click.prompt(
@@ -295,10 +393,22 @@ def handle_outrider_init(
         else "prompt for an interest UUID"
     )
     click.echo("")
+    if single_tier:
+        setup_desc = "single-file workflow"
+    else:
+        _d = drafter_provider or provider or "connected provider"
+        _r = refiner_provider or provider or "connected provider"
+        _dm = drafter_model or model
+        _rm = refiner_model or model
+        setup_desc = (
+            f"two-tier (default) — drafter {_d}{':' + _dm if _dm else ''}"
+            f" + refiner {_r}{':' + _rm if _rm else ''}, cron off"
+        )
     click.echo("Plan:")
     click.echo(f"  - Repo:      {resolved_repo}")
     click.echo(f"  - Interest:  {interest_desc}")
     click.echo(f"  - Mode:      {mode} — {mode_desc}")
+    click.echo(f"  - Setup:     {setup_desc}")
     click.echo(
         "  - The engine installs everything server-side as remyx-ai[bot]; "
         "your local git is untouched."
@@ -346,11 +456,20 @@ def handle_outrider_init(
     )
 
     # 7. Provision (server-side, bot-authored)
+    # Resolve the tier providers now that we know what's connected. When the
+    # caller didn't name a provider, each tier falls back to the connected
+    # provider (whichever it is) — no vendor is hardcoded.
+    default_provider = provider or _resolve_connected_provider(api_key)
+    phases = _build_init_phases(
+        single_tier, provider, model,
+        drafter_provider, drafter_model, refiner_provider, refiner_model,
+        default_provider=default_provider,
+    )
     auto_merge = (mode == "auto")
     click.echo("\nProvisioning Outrider via engine.remyx.ai…")
     resp = provision_action(
         resolved_interest, repo_url=repo_url,
-        auto_merge=auto_merge, api_key=api_key,
+        auto_merge=auto_merge, phases=phases, api_key=api_key,
     )
     task_id = resp.get("task_id")
     if not task_id:
