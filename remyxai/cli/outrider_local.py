@@ -357,6 +357,10 @@ on:
         description: 'Specific model name (e.g. claude-opus-4-8, glm-5.2, kimi-k3). Empty = provider default.'
         required: false
         default: ''
+      base-url:
+        description: 'Optional Anthropic-compatible endpoint (self-hosted model, litellm proxy, vLLM Anthropic shim, on-prem gateway). Overrides the per-provider default when set. Empty = provider default.'
+        required: false
+        default: ''
       search-method:
         description: 'Optional free-text method query. Runs an engine search and implements the top hit.'
         required: false
@@ -424,6 +428,7 @@ jobs:
           # extend the implementation timeout, etc.
           provider: ${{{{ inputs.provider }}}}
           model: ${{{{ inputs.model }}}}
+          model-base-url: ${{{{ inputs.base-url }}}}
           search-method: ${{{{ inputs.search-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
           claude-timeout: ${{{{ inputs.claude-timeout }}}}
