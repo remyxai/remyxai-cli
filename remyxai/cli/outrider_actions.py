@@ -566,7 +566,7 @@ def _gh_latest_run_url(repo, sleep=time.sleep):
 
 def handle_outrider_trigger(
     repo, search_method, pin_arxiv, interest_id, ref, claude_timeout=None,
-    provider=None, model=None,
+    provider=None, model=None, base_url=None, publish=None,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -636,6 +636,13 @@ def handle_outrider_trigger(
         # hand-rolled workflows may need updating.
         "provider": provider or "",
         "model": model or "",
+        # `base-url` routes the coding agent at a self-hosted or on-prem
+        # Anthropic-compatible endpoint (litellm proxy, vLLM shim,
+        # Cloudflare Access, etc). Overrides the per-provider default.
+        # `publish=branch` produces the drafter branch without opening a
+        # PR — dogfood / review-before-publish path.
+        "base-url": base_url or "",
+        "publish": publish or "",
     }
 
     click.echo(f"Dispatching Outrider on {resolved_repo} (ref={branch})…")
@@ -643,6 +650,10 @@ def handle_outrider_trigger(
         click.echo(f"  provider:       {provider}")
     if model:
         click.echo(f"  model:          {model}")
+    if base_url:
+        click.echo(f"  base-url:       {base_url}")
+    if publish:
+        click.echo(f"  publish:        {publish}")
     if search_method:
         click.echo(f"  search-method:  {search_method!r}")
     if pin_arxiv:

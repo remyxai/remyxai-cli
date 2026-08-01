@@ -896,7 +896,27 @@ def outrider_setup_local(
                   "which sets ANTHROPIC_MODEL in the action's env. "
                   "Empty = provider picks its default."
               ))
-def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_timeout, provider, model):
+@click.option("--base-url", "base_url", default=None,
+              help=(
+                  "Anthropic-compatible endpoint URL to route the coding "
+                  "agent at (self-hosted model behind a litellm proxy, "
+                  "vLLM Anthropic shim, on-prem gateway, Cloudflare "
+                  "Access). Overrides the per-provider default. Requires "
+                  "the target workflow to declare a `base-url` "
+                  "workflow_dispatch input; older templates need "
+                  "`remyxai outrider init` re-run to pick this up."
+              ))
+@click.option("--publish", "publish", default=None,
+              type=click.Choice(["pr", "branch"]),
+              help=(
+                  "'pr' (default) opens a draft PR / Issue on the target "
+                  "repo. 'branch' produces the drafter branch without "
+                  "opening a PR — useful for dogfooding a run and "
+                  "reviewing the output before deciding what to publish. "
+                  "Requires the target workflow to declare a `publish` "
+                  "input (all CLI-generated templates do)."
+              ))
+def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_timeout, provider, model, base_url, publish):
     """
     Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -945,6 +965,8 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_ti
         claude_timeout=claude_timeout,
         provider=provider,
         model=model,
+        base_url=base_url,
+        publish=publish,
     )
 
 

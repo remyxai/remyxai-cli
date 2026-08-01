@@ -550,3 +550,135 @@ def test_cli_model_combines_with_provider(monkeypatch):
     assert captured["inputs"]["model"] == "glm-4.6"
     assert captured["inputs"]["claude-timeout"] == "1500"
     assert "model:          glm-4.6" in result.output
+
+
+# ─── --base-url forwarding ────────────────────────────────────────────────
+
+
+def test_trigger_forwards_base_url_when_set(monkeypatch, capsys):
+    """`--base-url` flows to workflow_dispatch as the `base-url` input —
+    the self-hosted / on-prem coding-agent endpoint override."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda repo, sleep=None: None)
+
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv="2607.24223",
+        interest_id=None, ref=None,
+        base_url="https://litellm.internal.acme/anthropic",
+    )
+    assert captured["inputs"]["base-url"] == "https://litellm.internal.acme/anthropic"
+    assert "base-url:       https://litellm.internal.acme/anthropic" in capsys.readouterr().out
+
+
+def test_trigger_omits_base_url_when_unset(monkeypatch):
+    """No flag → empty string → workflow's per-provider default applies."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda repo, sleep=None: None)
+
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method="X", pin_arxiv=None,
+        interest_id=None, ref=None,
+    )
+    assert captured["inputs"]["base-url"] == ""
+
+
+# ─── --publish forwarding ─────────────────────────────────────────────────
+
+
+def test_trigger_forwards_publish_branch(monkeypatch, capsys):
+    """`--publish branch` produces the drafter branch without opening a PR
+    — the dogfood / review-before-publish path."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda repo, sleep=None: None)
+
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv="2607.24223",
+        interest_id=None, ref=None, publish="branch",
+    )
+    assert captured["inputs"]["publish"] == "branch"
+    assert "publish:        branch" in capsys.readouterr().out
+
+
+def test_cli_base_url_and_publish_reach_dispatch(monkeypatch):
+    """End-to-end through click: --base-url + --publish both land in the
+    dispatched inputs, alongside --provider / --pin-arxiv."""
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return (True, "")
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger",
+        "--repo", "owner/name",
+        "--pin-arxiv", "2607.24223",
+        "--base-url", "https://litellm.internal.acme/anthropic",
+        "--publish", "branch",
+        "--provider", "zai",
+        "--model", "glm-5.2",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["base-url"] == "https://litellm.internal.acme/anthropic"
+    assert captured["inputs"]["publish"] == "branch"
+    assert captured["inputs"]["provider"] == "zai"
+    assert captured["inputs"]["pin-arxiv"] == "2607.24223"
+
+
+def test_cli_publish_rejects_unknown_value(monkeypatch):
+    """`--publish foo` fails at click's argument-parsing layer — before
+    any dispatch — so we never ship an invalid workflow input on the wire."""
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger",
+        "--repo", "owner/name",
+        "--publish", "release",
+    ])
+    assert result.exit_code != 0
+    assert "publish" in result.output.lower()

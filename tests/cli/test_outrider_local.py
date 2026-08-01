@@ -55,17 +55,16 @@ def test_render_declares_provider_workflow_input_with_all_backends():
     assert "default: 'anthropic'" in wf
 
 
-def test_render_forwards_provider_and_model_to_action():
-    """Both `provider` and `model` workflow_dispatch inputs are threaded
-    into the action's `with:` block so per-dispatch overrides propagate
-    all the way through — the action's `provider` input drives base-URL +
-    auth wiring; `model` sets ANTHROPIC_MODEL for cost telemetry accuracy."""
+def test_render_forwards_provider_model_and_base_url_to_action():
+    """`provider`, `model`, and `base-url` workflow_dispatch inputs are
+    threaded into the action's `with:` block so per-dispatch overrides
+    propagate all the way through — the action's `provider` picks default
+    base-URL + auth wiring, `model` sets ANTHROPIC_MODEL, and an explicit
+    `base-url` overrides the provider default (self-hosted / on-prem)."""
     wf = outrider_local._render_local_workflow("uuid")
     assert "provider: ${{ inputs.provider }}" in wf
     assert "model: ${{ inputs.model }}" in wf
-    # model-base-url is no longer set from the workflow — the action's
-    # `provider` input picks the base URL from its internal map.
-    assert "model-base-url:" not in wf
+    assert "model-base-url: ${{ inputs.base-url }}" in wf
 
 
 def test_render_backend_moonshot_selects_moonshot_default_and_timeout():
