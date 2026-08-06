@@ -21,6 +21,39 @@ The App is the load-bearing piece. At runtime, the workflow asks the engine to m
 
 If the App isn't installed yet, the command surfaces the install link — accept it once and the engine handles the rest.
 
+### Provider keys per tier
+
+The engine pushes one model-provider secret: the credential you connected at engine.remyx.ai/integrations. A two-tier install that names a *different* provider on a tier (`--drafter-provider zai` while your connected provider is Anthropic) therefore needs a second secret, and without it the repo provisions cleanly and then fails auth on its first run in a few hundred milliseconds:
+
+```
+ERROR ✗ auth check: ANTHROPIC_AUTH_TOKEN is not set — agent calls will fail with HTTP 401.
+```
+
+`init` closes that gap: it works out which provider the engine covers, pushes every other tier's key from your shell (`ANTHROPIC_API_KEY` / `ZAI_API_KEY` / `MOONSHOT_API_KEY`, via `gh`), and refuses to provision at all when a tier has no key either way. The plan block spells the routing out before you confirm:
+
+```
+Plan:
+  - Repo:      owner/name
+  - Setup:     two-tier (default) — drafter zai:glm-5.2 + refiner anthropic, cron off
+  - Keys:      anthropic — pushed by the engine from your connected credential
+               zai — ZAI_API_KEY from this shell → repo secret
+```
+
+`--dry-run` reports the same routing (and the same refusal) without changing anything. `--skip-key-check` provisions anyway if you intend to set the secret later with `outrider set-provider-secret`.
+
+An install whose every tier uses your connected provider — the ordinary case — needs no local key and no `gh` at all.
+
+### Changing a live install: `--force`
+
+Provisioning is idempotent, and a repo that's already fully installed short-circuits with `… Already enabled` — including the step that writes the workflow files. So a wrong `--refiner-provider` on first install can't be corrected by re-running `init`:
+
+```bash
+remyxai outrider init --repo owner/name --interest <uuid> \
+  --refiner-provider moonshot --refiner-model kimi-k3 --force
+```
+
+`--force` revokes the current installation first, which is what lets the provisioner re-drive every step and rewrite the workflow YAML in place (new setup PR, auto-merged in `auto` mode). It rotates the repo's `REMYX_API_KEY` as a side effect — the old key is revoked once the new one is live.
+
 
 ## `outrider setup-local` — when the App can't be granted
 

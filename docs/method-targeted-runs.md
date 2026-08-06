@@ -90,9 +90,22 @@ Outrider is not installed on owner/name. Install it first:
 | `--repo owner/name` | cwd's git remote | Target repo |
 | `--interest <uuid>` | the workflow's configured interest | Override the Research Interest for this run |
 | `--ref <branch>` | the repo's default branch | The git ref to dispatch against |
-| `--provider <name>` | the workflow's default (`anthropic`) | Route Claude Code at a specific model provider for this dispatch (`anthropic` or `zai`). See [Provider + model routing](#provider--model-routing) below |
-| `--model <name>` | (provider default) | Specific model to request from the provider (e.g. `claude-opus-4-7`, `glm-5.2`, `glm-4.6`). Forwarded as `ANTHROPIC_MODEL` env. Empty = the provider picks |
+| `--provider <name>` | the workflow's default (`anthropic`) | Route Claude Code at a specific model provider for this dispatch (`anthropic`, `zai`, `moonshot`). See [Provider + model routing](#provider--model-routing) below |
+| `--model <name>` | (provider default) | Specific model to request from the provider (e.g. `claude-opus-4-7`, `glm-5.2`, `kimi-k3`). Forwarded as `ANTHROPIC_MODEL` env. Empty = the provider picks |
 | `--claude-timeout <seconds>` | the action's 900s default | Wall-clock ceiling for the Claude Code agent calls on this dispatch (preflight + implementation share the budget). Raise for very large monorepos |
+| `--wait-for-slot` | off | Wait for a pending run to start instead of dispatching over it. See [Dispatching several runs at one repo](#dispatching-several-runs-at-one-repo) |
+
+Refinement inputs — see [Refinement runs](#refinement-runs-building-on-an-existing-branch):
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--start-from-ref <branch>` | (implement from scratch) | Branch the agent **builds on** — a drafter branch, or a third party's stalled PR branch |
+| `--lead-content <md>` / `--lead-content-file <path>` | — | Inline markdown fed to the agent as leading context (a gap analysis). File form is capped at ~60k chars by GitHub's dispatch payload limit |
+| `--staged-synthesis` | off | Enable the multi-pass staged-synthesis flow (what the two-tier refiner turns on) |
+| `--mode <mode>` | `recommend` | Run mode; `brief` produces the write-up without implementing |
+| `--publish <pr\|branch>` | `pr` | `branch` pushes a fork branch and opens nothing — the drafter behavior |
+| `--fidelity-policy <block\|advisory\|off>` | the workflow's default | Pre-PR fidelity gate. `advisory` suits a human-vetted warm-start branch a strict full-reference-port audit would wrongly block |
+| `--test-integration-policy <policy>` | the workflow's default | Override the run's test-integration policy |
 
 
 ## Provider + model routing
@@ -147,8 +160,48 @@ Maps `--provider` to the secret name the workflow's `Configure provider auth` st
 |---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` |
 | `zai` | `ZAI_API_KEY` |
+| `moonshot` | `MOONSHOT_API_KEY` |
 
-Future providers extend this mapping (Bedrock → `AWS_BEARER_TOKEN_BEDROCK`, etc.) as the rate table grows.
+Future providers extend this mapping (Bedrock → `AWS_BEARER_TOKEN_BEDROCK`, etc.) as the rate table grows. The same three env var names are what `outrider init` reads from your shell when a tier names a provider the engine won't push a key for.
+
+
+## Refinement runs: building on an existing branch
+
+A dispatch doesn't have to start from scratch. `--start-from-ref` pins the branch the agent builds **on**, and `--lead-content-file` pipes in a written gap analysis as leading context — the same shape the two-tier refiner uses when it promotes a drafter branch:
+
+```bash
+remyxai outrider trigger --repo owner/name \
+  --start-from-ref outrider/deim-draft \
+  --lead-content-file gap-analysis.md \
+  --staged-synthesis --fidelity-policy advisory
+```
+
+Use it to promote yesterday's drafter output, or to revive a third party's stalled PR branch without re-deriving the implementation.
+
+`--start-from-ref` is **not** `--ref`: `--ref` selects which branch the *workflow file* is read from, while `start-from-ref` is what the agent checks out and extends.
+
+Inputs the installed workflow doesn't declare are dropped and the dispatch retried, with a warning naming them — an older install still runs, it just falls back to its baked defaults. To pick the inputs up for real, update the install:
+
+```bash
+remyxai outrider init --repo owner/name --interest <uuid> --force
+```
+
+GitHub accepts at most 10 inputs per dispatch; the CLI rejects an over-full combination at the command boundary rather than letting GitHub 422 it.
+
+
+## Dispatching several runs at one repo
+
+The generated workflows use a static concurrency group (`group: outrider`, `cancel-in-progress: false`), which permits exactly **one pending run**. Firing four dispatches at one repo therefore yields one running, one queued, and two silently cancelled — and a cancelled queued run looks like a flake, not an error.
+
+`trigger` warns when a run is already pending, and `--wait-for-slot` serializes instead:
+
+```bash
+for paper in 2402.02347v3 2410.20305v2 2501.12948v1; do
+  remyxai outrider trigger --repo owner/name --pin-arxiv "$paper" --wait-for-slot
+done
+```
+
+It polls for up to 15 minutes and errors rather than dispatching over a pending run.
 
 
 ## Long-running repos: `--claude-timeout`

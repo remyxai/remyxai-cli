@@ -7,25 +7,29 @@ The engine, via the Remyx GitHub App (remyx-ai[bot]), sets the repo secrets,
 writes the workflow, opens a bot-authored setup PR, and (in `auto` mode)
 merges it and fires the first run.
 
-Nothing touches the user's local git or a personal `gh` token; the CLI only
-needs the user's REMYX_API_KEY. Flow:
+Nothing touches the user's local git, and the ordinary install needs only the
+user's REMYX_API_KEY. Flow:
 
   1. Resolve the target repo (owner/name).
   2. Resolve the ResearchInterest (provided UUID, auto-created, or prompted).
-  3. Ensure the Remyx GitHub App is installed on the repo (surface the install
+  3. Resolve the tier config + how each tier's provider key reaches the repo,
+     and refuse now if one can't (see ProviderKeyPlan).
+  4. Ensure the Remyx GitHub App is installed on the repo (surface the install
      link + poll — installing is an interactive browser step).
-  4. Ensure a model provider (Anthropic via `claude_code`) is connected.
-  5. Kick off provisioning and report the bot-authored setup PR.
+  5. Ensure a model provider is connected, and push the secrets for any tier
+     provider the engine won't cover (this is the one step that uses `gh`).
+  6. Kick off provisioning and report the bot-authored setup PR.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import click
 
@@ -34,6 +38,7 @@ from remyxai.api.interests import (
     provision_action,
     poll_provision_action,
 )
+from remyxai.api.outrider import list_installations, revoke_installation
 from remyxai.cli.interest_actions import (
     RepoAnalysisError,
     create_interest_from_repo,
@@ -65,10 +70,48 @@ MODEL_PROVIDERS = [
 # key flag on this command today.
 ANTHROPIC_INTEGRATION = "claude_code"
 
+# The `--provider` / `--drafter-provider` / `--refiner-provider` choice list.
+# Derived from MODEL_PROVIDERS so adding a provider in one place reaches every
+# call site (the four hand-maintained click.Choice lists this replaced were
+# how `moonshot` ended up accepted by `init` but rejected by
+# `set-provider-secret`).
+PROVIDER_CHOICES = [workflow_value for _, workflow_value in MODEL_PROVIDERS]
+
+# Integration id (integrations API / the engine's `model_provider` field) for
+# a workflow provider value.
+PROVIDER_INTEGRATION_IDS = {
+    workflow_value: integration_id
+    for integration_id, workflow_value in MODEL_PROVIDERS
+}
+
+# Maps a provider name (matching the workflow's `provider` input choices) to
+# the GitHub Actions secret name the workflow's `Configure provider auth` step
+# reads. Each provider has a conventional env var name; we mirror that
+# convention here — and read the same names from the environment when `init`
+# has to push a tier's key itself — so customers don't have to look it up.
+#
+# Twin of ``outrider_local._BACKEND_REGISTRY[*]["secret_env"]``; kept separate
+# only because that module imports this one (no cycle allowed). A test asserts
+# the two agree.
+_PROVIDER_SECRET_NAMES = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "zai": "ZAI_API_KEY",
+    "moonshot": "MOONSHOT_API_KEY",
+}
+
 INSTALL_POLL_INTERVAL = 5     # seconds between App-install checks
 INSTALL_POLL_TIMEOUT = 300    # stop waiting for the browser install after 5 min
 PROVISION_POLL_INTERVAL = 3
 PROVISION_POLL_TIMEOUT = 300
+# `trigger --wait-for-slot`: a queued Outrider run usually starts within a
+# minute or two, but a busy Actions account can hold it much longer.
+QUEUE_POLL_INTERVAL = 15
+QUEUE_POLL_TIMEOUT = 900
+# GitHub's per-dispatch input ceiling (workflow_dispatch accepts at most 10
+# top-level inputs) and a conservative bound on a single input's size — the
+# whole payload has to stay under ~64KB.
+GH_MAX_DISPATCH_INPUTS = 10
+LEAD_CONTENT_MAX_CHARS = 60000
 
 
 # ─── repo resolution (read-only; never mutates the working tree) ───────────
@@ -161,6 +204,18 @@ def _resolve_interest_id(interest_id, auto_interest, repo, repo_url, api_key):
                 "  🧪 experiment-history extraction dispatched; "
                 "interest context will keep deepening as it completes."
             )
+        # The profile is derived from a recency-weighted commit sample, so on a
+        # large multi-domain repo it can describe the last few months of work
+        # as if it were the whole repo — and nothing downstream fails, the
+        # recommendations just skew. Worth 20 seconds of the operator's eyes.
+        click.echo(
+            f"  ⓘ Skim the generated profile before the first run — on a "
+            f"large multi-domain repo it can under-represent subsystems that "
+            f"haven't changed lately:\n"
+            f"      remyxai interests get -i {new_id}\n"
+            f"      remyxai interests update -i {new_id} -c \"<accurate "
+            f"description>\"   # then: remyxai papers refresh"
+        )
         return new_id
 
     typed = click.prompt("Remyx interest UUID (from engine.remyx.ai)").strip()
@@ -209,35 +264,50 @@ def _ensure_app_installed(repo, api_key, no_wait, sleep=time.sleep):
     )
 
 
-def _resolve_connected_provider(api_key):
-    """Workflow value of the first connected model provider (in priority
-    order), or ``None`` when none is connected / status can't be read.
+def _connected_providers(api_key):
+    """Workflow values of every connected model provider, in priority order.
 
-    Vendor-neutral: returns whatever the user actually connected, so a tier
-    with no explicit provider follows the account's own setup rather than a
-    hardcoded default.
+    Empty when none is connected or status can't be read. Vendor-neutral:
+    reports whatever the user actually connected, so a tier with no explicit
+    provider follows the account's own setup rather than a hardcoded default.
     """
+    connected = []
     for integration_id, workflow_value in MODEL_PROVIDERS:
         try:
             if get_integration_status(
                 integration_id, api_key=api_key
             ).get("connected"):
-                return workflow_value
+                connected.append(workflow_value)
         except Exception:
             continue
-    return None
+    return connected
 
 
-def _ensure_model_provider(anthropic_key, api_key):
+def _resolve_connected_provider(api_key):
+    """Workflow value of the first connected model provider, or ``None``.
+
+    The engine resolves the same way when no ``model_provider`` is named, so
+    this is "the provider a tier follows when the caller doesn't pick one".
+    """
+    connected = _connected_providers(api_key)
+    return connected[0] if connected else None
+
+
+def _ensure_model_provider(anthropic_key, api_key, connected=None):
     """Ensure *some* model provider is connected. Returns True if so.
 
     Any provider counts equally — Claude Code (Anthropic), Z.ai, or
     Moonshot AI. Non-fatal when absent: provisioning still proceeds, but the
     first run can't complete until a key is connected, so we warn loudly.
+
+    ``connected`` accepts an already-resolved list from ``_connected_providers``
+    so the init flow doesn't re-query integration status it just read.
     """
-    connected = _resolve_connected_provider(api_key)
+    connected = (
+        _connected_providers(api_key) if connected is None else list(connected)
+    )
     if connected:
-        click.echo(f"✓ Model provider connected ({connected})")
+        click.echo(f"✓ Model provider connected ({', '.join(connected)})")
         return True
 
     # No provider connected. The inline --anthropic-key / $ANTHROPIC_API_KEY
@@ -261,6 +331,243 @@ def _ensure_model_provider(anthropic_key, api_key):
     except Exception as e:
         raise click.ClickException(f"Failed to connect the provided key: {e}")
     click.echo("✓ Connected an Anthropic key")
+    return True
+
+
+# ─── tier provider keys ────────────────────────────────────────────────────
+#
+# A two-tier install can name a different provider per tier, but the engine
+# pushes exactly ONE model-provider secret (the connected credential it
+# resolves for the install — see resolve_model_provider_key). So a repo whose
+# drafter runs at z.ai while the account's connected provider is Anthropic
+# provisions clean and then dies on its first run in a few hundred
+# milliseconds ("ANTHROPIC_AUTH_TOKEN is not set"). `init` closes that gap:
+# it decides up front which provider the engine covers, pushes every other
+# tier's key itself from this machine's environment, and refuses to provision
+# at all when a tier has no key anywhere.
+
+class ProviderKeyPlan(NamedTuple):
+    """How each tier provider's API key reaches the repo.
+
+    engine_provider: workflow value of the provider the engine pushes from the
+        account's connected credential (``None`` when it covers nothing).
+    pushes: ``(provider, secret_name, key)`` this CLI must push with `gh`.
+    missing: providers whose key won't reach the repo — a hard failure. A
+        provider can be connected and still land here: the engine pushes one
+        key per install, so a second tier's key has to come from this shell.
+    connected: the account's connected providers, for diagnosis.
+    """
+    engine_provider: Optional[str]
+    pushes: list
+    missing: list
+    connected: tuple = ()
+
+
+def _provider_env_key(provider, anthropic_key=None):
+    """This machine's API key for ``provider``, or ``None``.
+
+    Read from the same env var the generated workflow reads as a repo secret
+    (ANTHROPIC_API_KEY / ZAI_API_KEY / MOONSHOT_API_KEY), so "the key that
+    works locally" is the key that gets installed. ``--anthropic-key`` wins
+    for the anthropic provider.
+    """
+    if provider == "anthropic" and (anthropic_key or "").strip():
+        return anthropic_key.strip()
+    secret_name = _PROVIDER_SECRET_NAMES.get(provider)
+    if not secret_name:
+        return None
+    return (os.environ.get(secret_name) or "").strip() or None
+
+
+def _tier_providers(phases):
+    """Distinct providers a phases config names, in tier order."""
+    out = []
+    for tier in ("drafter", "refiner", "main"):
+        prov = ((phases or {}).get(tier) or {}).get("provider")
+        if prov and prov not in out:
+            out.append(prov)
+    return out
+
+
+def _plan_provider_secrets(phases, connected, anthropic_key=None):
+    """Route each tier provider's key to the repo; report what's unroutable.
+
+    ``connected`` is the account's connected providers (workflow values, from
+    ``_connected_providers``). When ``phases`` pins no provider, the tier list
+    falls back to what the engine would bake into the workflow: the first
+    connected provider, else anthropic.
+    """
+    tiers = _tier_providers(phases) or (
+        [connected[0]] if connected else ["anthropic"]
+    )
+    env = {p: _provider_env_key(p, anthropic_key) for p in tiers}
+
+    # Hand the engine whichever tier provider we CAN'T push from here, so the
+    # ordinary single-provider install still needs no `gh` and no local key.
+    engine_provider = (
+        next((p for p in tiers if p in connected and not env[p]), None)
+        or next((p for p in tiers if p in connected), None)
+    )
+    if engine_provider is None and not connected and env.get("anthropic"):
+        # Nothing connected, but --anthropic-key / $ANTHROPIC_API_KEY gets
+        # connected inline during preflight — the engine pushes that one.
+        engine_provider = "anthropic"
+
+    pushes = [
+        (p, _PROVIDER_SECRET_NAMES[p], key)
+        for p, key in env.items() if key and p != engine_provider
+    ]
+    missing = [p for p in tiers if not env[p] and p != engine_provider]
+    return ProviderKeyPlan(engine_provider, pushes, missing, tuple(connected))
+
+
+def _describe_key_plan(plan):
+    """One plan line per provider: how its key reaches the repo."""
+    lines = []
+    if plan.engine_provider:
+        lines.append(
+            f"{plan.engine_provider} — pushed by the engine from your "
+            f"connected credential"
+        )
+    for provider, secret_name, _ in plan.pushes:
+        lines.append(f"{provider} — {secret_name} from this shell → repo secret")
+    for provider in plan.missing:
+        secret_name = _PROVIDER_SECRET_NAMES[provider]
+        if provider in plan.connected:
+            # Connected, but the engine pushes one key per install and that
+            # push is already committed to another tier's provider.
+            lines.append(
+                f"{provider} — NO KEY ({secret_name} unset here; it's "
+                f"connected, but the engine pushes only one key per install)"
+            )
+        else:
+            lines.append(
+                f"{provider} — NO KEY ({secret_name} unset, not connected)"
+            )
+    return lines
+
+
+def _validate_provider_keys(plan, skip_key_check=False):
+    """Hard-fail on a tier whose provider has no key — at plan time.
+
+    Provisioning succeeds regardless (it's just secrets + a workflow file), so
+    without this the failure lands minutes later inside a GitHub run: the
+    action's auth guard exits in ~260ms and every dispatch repeats it. Cheaper
+    to refuse here.
+    """
+    if not plan.missing:
+        return
+    fixes = []
+    for provider in plan.missing:
+        secret_name = _PROVIDER_SECRET_NAMES[provider]
+        fixes.append(
+            f"    - export {secret_name}=… and re-run (init pushes it to the "
+            f"repo as a secret)"
+        )
+    if not all(p in plan.connected for p in plan.missing):
+        fixes.append(
+            "    - connect the provider at engine.remyx.ai/integrations, then "
+            "re-run"
+        )
+    fixes.append(
+        "    - point every tier at one provider "
+        "(--provider), so the engine's single key push covers them all"
+    )
+    message = (
+        f"no API key for: {', '.join(plan.missing)}.\n"
+        f"  The install would provision cleanly and then fail auth on its "
+        f"first run, so init stops here. Fix any one of:\n"
+        + "\n".join(fixes)
+        + "\n  Or pass --skip-key-check to provision anyway."
+    )
+    if skip_key_check:
+        click.secho(
+            f"⚠ --skip-key-check: {message.splitlines()[0]} The first run "
+            f"can't complete until those secrets are set.",
+            fg="yellow",
+        )
+        return
+    raise click.ClickException(message)
+
+
+def _require_gh_for_pushes(pushes):
+    """Refuse at plan time when a tier's key needs `gh` and `gh` can't push."""
+    if not pushes:
+        return
+    from remyxai.cli.outrider_local import _gh_authenticated, _gh_available
+
+    secrets = ", ".join(name for _, name, _ in pushes)
+    if not _gh_available():
+        raise click.ClickException(
+            f"this install needs {secrets} pushed to the repo, which requires "
+            f"the `gh` CLI (only the account's connected provider is pushed "
+            f"server-side).\n"
+            f"  Install gh (https://cli.github.com), or connect that provider "
+            f"at engine.remyx.ai/integrations and use it for every tier."
+        )
+    if not _gh_authenticated():
+        raise click.ClickException(
+            f"this install needs {secrets} pushed to the repo, but `gh` isn't "
+            f"authenticated. Run `gh auth login` (admin scope on the repo) and "
+            f"re-run."
+        )
+
+
+def _push_provider_secrets(repo, pushes):
+    """Push the tier secrets `gh`-side, before provisioning dispatches a run."""
+    from remyxai.cli.outrider_local import _gh_set_secret
+
+    for provider, secret_name, key in pushes:
+        if len(key) < _SECRET_MIN_LENGTH_WARN:
+            click.secho(
+                f"⚠ {secret_name} is {len(key)} chars — unusually short for an "
+                f"API key. Proceeding, but the action's auth guard may reject "
+                f"it.",
+                fg="yellow",
+            )
+        click.echo(f"  Setting {secret_name} on {repo} (provider={provider})…")
+        _gh_set_secret(repo, secret_name, key)
+
+
+# ─── forced re-provisioning ────────────────────────────────────────────────
+
+def _revoke_installation_for(repo, interest_id, api_key):
+    """Revoke the live install for interest+repo so a re-provision re-drives.
+
+    Provisioning is idempotent server-side and returns "Already enabled" once a
+    repo is fully installed — which also means it never rewrites the workflow
+    files, so a wrong tier provider is permanent through the CLI. A revoked row
+    skips that short-circuit: the provisioner re-runs every step and updates
+    the workflow YAML in place (new setup PR, auto-merged in `auto` mode).
+
+    Returns True when an install was revoked, False when there was nothing to
+    revoke (a fresh repo — `--force` is then a no-op).
+    """
+    try:
+        installs = list_installations(api_key=api_key)
+    except Exception as e:
+        raise click.ClickException(
+            f"--force couldn't list your Outrider installations: {e}"
+        )
+    live = [
+        row for row in installs
+        if row.get("repo_full_name") == repo
+        and str(row.get("interest_id")) == str(interest_id)
+        and not row.get("revoked")
+    ]
+    if not live:
+        return False
+    for row in live:
+        try:
+            revoke_installation(row["id"], api_key=api_key)
+        except Exception as e:
+            raise click.ClickException(
+                f"--force couldn't revoke installation {row.get('id')}: {e}"
+            )
+        click.echo(
+            f"  ✓ Revoked the current install ({row.get('label') or row['id']})"
+            f" — the workflow files stay put and get rewritten below."
+        )
     return True
 
 
@@ -352,6 +659,7 @@ def handle_outrider_init(
     single_tier=False, provider=None, model=None,
     drafter_provider=None, drafter_model=None,
     refiner_provider=None, refiner_model=None,
+    force=False, skip_key_check=False,
 ):
     """Set up Outrider on a repo via the Remyx engine. Called from
     commands.outrider_init."""
@@ -361,8 +669,8 @@ def handle_outrider_init(
         )
 
     # Two-tier is the default; single_tier opts out. Validate tier flags now
-    # (fail fast, before any work); the phases config is built at provision
-    # time once the connected provider is known.
+    # (fail fast, before any work); the phases config itself is built in step
+    # 3, once the account's connected providers are known.
     _validate_init_tier_flags(single_tier, drafter_provider, drafter_model,
                               refiner_provider, refiner_model)
 
@@ -381,7 +689,20 @@ def handle_outrider_init(
         )
     repo_url = f"https://github.com/{resolved_repo}"
 
-    # 3. Plan
+    # 3. Resolve the tier config + how each tier's provider key reaches the
+    # repo. Both are read-only (integration status + the environment), so the
+    # plan below — and --dry-run — show the real routing, and a tier with no
+    # key anywhere fails before anything is provisioned.
+    connected = [] if mode == "off" else _connected_providers(api_key)
+    default_provider = provider or (connected[0] if connected else None)
+    phases = _build_init_phases(
+        single_tier, provider, model,
+        drafter_provider, drafter_model, refiner_provider, refiner_model,
+        default_provider=default_provider,
+    )
+    key_plan = _plan_provider_secrets(phases, connected, anthropic_key)
+
+    # 4. Plan
     mode_desc = {
         "auto": "provision, merge the setup PR, and start the first run",
         "review": "provision and open a setup PR for you to review and merge",
@@ -396,8 +717,9 @@ def handle_outrider_init(
     if single_tier:
         setup_desc = "single-file workflow"
     else:
-        _d = drafter_provider or provider or "connected provider"
-        _r = refiner_provider or provider or "connected provider"
+        _fallback = default_provider or "connected provider"
+        _d = drafter_provider or provider or _fallback
+        _r = refiner_provider or provider or _fallback
         _dm = drafter_model or model
         _rm = refiner_model or model
         setup_desc = (
@@ -409,11 +731,25 @@ def handle_outrider_init(
     click.echo(f"  - Interest:  {interest_desc}")
     click.echo(f"  - Mode:      {mode} — {mode_desc}")
     click.echo(f"  - Setup:     {setup_desc}")
+    if mode != "off":
+        for i, line in enumerate(_describe_key_plan(key_plan)):
+            click.echo(f"  {'- Keys:     ' if i == 0 else '              '}{line}")
+    if force:
+        click.echo(
+            "  - Force:     revoke the existing install first so the workflows "
+            "get rewritten (rotates the repo's REMYX_API_KEY)"
+        )
     click.echo(
         "  - The engine installs everything server-side as remyx-ai[bot]; "
         "your local git is untouched."
     )
     click.echo("")
+
+    # 4b. Refuse now if a tier's key can't reach the repo — provisioning
+    # itself would succeed and the failure would surface one dispatch later.
+    if mode != "off":
+        _validate_provider_keys(key_plan, skip_key_check=skip_key_check)
+        _require_gh_for_pushes(key_plan.pushes)
 
     if dry_run:
         click.secho("dry-run: no changes made.", fg="yellow")
@@ -422,12 +758,12 @@ def handle_outrider_init(
     if not skip_confirm:
         click.confirm("Proceed?", abort=True, default=False)
 
-    # 4. Resolve interest
+    # 5. Resolve interest
     resolved_interest = _resolve_interest_id(
         interest_id, auto_interest, resolved_repo, repo_url, api_key
     )
 
-    # 5. Mode `off` stops here — interest only.
+    # 5b. Mode `off` stops here — interest only.
     if mode == "off":
         click.echo("")
         click.secho("✓ Interest ready.", fg="green", bold=True)
@@ -440,9 +776,16 @@ def handle_outrider_init(
 
     # 6. Preflight: App install + model provider (only needed to provision)
     _ensure_app_installed(resolved_repo, api_key, no_wait)
-    _ensure_model_provider(anthropic_key, api_key)
+    _ensure_model_provider(anthropic_key, api_key, connected=connected)
 
-    # 6b. Pre-warm recommendations so the first run has picks to open a PR
+    # 6b. Push the tier provider secrets the engine won't. Done BEFORE
+    # provisioning because `auto` mode fires the first run as its last step —
+    # a secret that lands after the dispatch is a secret that missed the run.
+    if key_plan.pushes:
+        click.echo("\nSetting tier provider secrets on the repo…")
+        _push_provider_secrets(resolved_repo, key_plan.pushes)
+
+    # 6c. Pre-warm recommendations so the first run has picks to open a PR
     # from. A brand-new interest ranks asynchronously; firing the Outrider
     # first run before the pool populates makes it report "no recommendations"
     # (the cold-start race). Trigger a refresh now and — unless --no-wait —
@@ -455,21 +798,29 @@ def handle_outrider_init(
         echo=click.echo,
     )
 
-    # 7. Provision (server-side, bot-authored)
-    # Resolve the tier providers now that we know what's connected. When the
-    # caller didn't name a provider, each tier falls back to the connected
-    # provider (whichever it is) — no vendor is hardcoded.
-    default_provider = provider or _resolve_connected_provider(api_key)
-    phases = _build_init_phases(
-        single_tier, provider, model,
-        drafter_provider, drafter_model, refiner_provider, refiner_model,
-        default_provider=default_provider,
-    )
+    # 7. Provision (server-side, bot-authored). `phases` + the key routing were
+    # resolved in step 3 from the account's connected providers — no vendor is
+    # hardcoded.
+    if force:
+        click.echo("\nForcing a re-provision…")
+        if not _revoke_installation_for(
+            resolved_repo, resolved_interest, api_key
+        ):
+            click.echo(
+                "  (nothing provisioned for this interest+repo yet — "
+                "--force is a no-op)"
+            )
     auto_merge = (mode == "auto")
     click.echo("\nProvisioning Outrider via engine.remyx.ai…")
     resp = provision_action(
         resolved_interest, repo_url=repo_url,
-        auto_merge=auto_merge, phases=phases, api_key=api_key,
+        auto_merge=auto_merge, phases=phases,
+        # Name the provider whose connected key the engine should push: the
+        # tier provider we can't push from here. Left unset it takes the first
+        # connected provider, which on a mixed-provider install can be the one
+        # tier that already had its key.
+        model_provider=PROVIDER_INTEGRATION_IDS.get(key_plan.engine_provider),
+        api_key=api_key,
     )
     task_id = resp.get("task_id")
     if not task_id:
@@ -504,10 +855,19 @@ def handle_outrider_init(
         )
     else:
         click.echo("  Next: merge the setup PR to activate Outrider.")
-    if result.get("model_key_missing"):
+    for provider, secret_name, _ in key_plan.pushes:
+        click.echo(f"  Repo secret {secret_name}: set (provider={provider})")
+    if result.get("model_key_missing") and not key_plan.pushes:
         click.secho(
-            "  ⚠ No model provider key set — connect Claude Code so the first "
-            "run can complete.", fg="yellow",
+            "  ⚠ No model provider key set — connect a provider at "
+            "engine.remyx.ai/integrations (or export its API key and re-run) "
+            "so the first run can complete.", fg="yellow",
+        )
+    if result.get("already_provisioned"):
+        click.secho(
+            "  ⓘ This repo was already provisioned, so the workflow files were "
+            "left as they are. Re-run with --force to rewrite them with this "
+            "tier config.", fg="yellow",
         )
 
 
@@ -665,6 +1025,103 @@ def _gh_dispatch_outrider(repo, branch, inputs):
     return (r.returncode == 0, (r.stderr or "").strip())
 
 
+_UNEXPECTED_INPUTS_RE = re.compile(r'"([^"]+)"')
+
+
+def _dispatch_with_input_fallback(repo, branch, inputs):
+    """Dispatch, dropping inputs the installed workflow doesn't declare.
+
+    GitHub rejects a dispatch naming an undeclared input with
+    ``HTTP 422 Unexpected inputs provided: ["mode", "lead-content"]``. Repos
+    installed before an input existed would dead-end there, so — mirroring the
+    engine's own trigger endpoint — drop exactly the inputs GitHub named and
+    retry once. The workflow's baked defaults apply for the dropped ones.
+
+    Returns ``(ok, stderr, dropped)``.
+    """
+    ok, stderr = _gh_dispatch_outrider(repo, branch, inputs)
+    if ok or "Unexpected inputs" not in (stderr or ""):
+        return ok, stderr, []
+    undeclared = {
+        name for name in _UNEXPECTED_INPUTS_RE.findall(stderr)
+        if name in inputs
+    }
+    if not undeclared:
+        return ok, stderr, []
+    pruned = {k: v for k, v in inputs.items() if k not in undeclared}
+    ok, stderr = _gh_dispatch_outrider(repo, branch, pruned)
+    return ok, stderr, sorted(undeclared)
+
+
+# Run statuses that mean "this run has not started yet". The generated
+# workflows use a static concurrency group (`group: outrider`) with
+# cancel-in-progress: false, which allows exactly ONE pending run — so
+# dispatching while another run is pending silently cancels the older one.
+_PENDING_RUN_STATUSES = ("queued", "waiting", "pending", "requested")
+
+
+def _gh_pending_runs(repo):
+    """Runs of the dispatch target that haven't started yet.
+
+    Returns a list of ``{"status", "url"}`` dicts (empty when gh fails — this
+    is an advisory check, never a reason to block a dispatch).
+    """
+    try:
+        out = subprocess.check_output(
+            ["gh", "run", "list", "--repo", repo,
+             "--workflow", WORKFLOW_FILENAME, "--limit", "20",
+             "--json", "status,url"],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        runs = json.loads(out or "[]")
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        return []
+    return [r for r in runs if r.get("status") in _PENDING_RUN_STATUSES]
+
+
+def _warn_or_wait_for_queue(repo, wait, sleep=time.sleep,
+                            interval=QUEUE_POLL_INTERVAL,
+                            timeout=QUEUE_POLL_TIMEOUT):
+    """Handle a run that's already pending on the repo before dispatching.
+
+    Without ``wait``, warn: the new dispatch will silently cancel the pending
+    run (the concurrency group holds one). With ``wait``, poll until the queue
+    drains so a batch of dispatches serializes instead of eating itself.
+    """
+    pending = _gh_pending_runs(repo)
+    if not pending:
+        return
+    if not wait:
+        click.secho(
+            f"⚠ {len(pending)} Outrider run(s) already pending on {repo}. The "
+            f"workflow's concurrency group holds one pending run, so this "
+            f"dispatch will cancel the queued one (it looks like a flake, not "
+            f"an error). Pass --wait-for-slot to serialize instead.",
+            fg="yellow",
+        )
+        for run in pending:
+            click.echo(f"    pending: {run.get('url')}")
+        return
+
+    click.echo(
+        f"Waiting for {len(pending)} pending run(s) on {repo} to start "
+        f"(--wait-for-slot)…"
+    )
+    waited = 0
+    while waited < timeout:
+        sleep(interval)
+        waited += interval
+        pending = _gh_pending_runs(repo)
+        if not pending:
+            click.echo(f"  ✓ Queue clear after {waited}s.")
+            return
+    raise click.ClickException(
+        f"still {len(pending)} pending run(s) on {repo} after {timeout}s. "
+        f"Dispatching now would cancel one — re-run later, or drop "
+        f"--wait-for-slot to dispatch anyway."
+    )
+
+
 def _gh_latest_run_url(repo, sleep=time.sleep):
     """Best-effort lookup of the most recent outrider.yml run URL."""
     for _ in range(5):
@@ -683,9 +1140,36 @@ def _gh_latest_run_url(repo, sleep=time.sleep):
     return None
 
 
+def _resolve_lead_content(lead_content, lead_content_file):
+    """Inline markdown for the run's leading context, from a flag or a file."""
+    if lead_content and lead_content_file:
+        raise click.UsageError(
+            "--lead-content and --lead-content-file are mutually exclusive."
+        )
+    if lead_content_file:
+        path = Path(lead_content_file)
+        if not path.is_file():
+            raise click.UsageError(
+                f"--lead-content-file is not a file: {lead_content_file}"
+            )
+        lead_content = path.read_text()
+    if not lead_content:
+        return ""
+    if len(lead_content) > LEAD_CONTENT_MAX_CHARS:
+        raise click.UsageError(
+            f"lead content is {len(lead_content)} chars; GitHub caps a "
+            f"workflow_dispatch payload at ~64KB, so keep it under "
+            f"{LEAD_CONTENT_MAX_CHARS}. Trim the gap analysis, or commit it to "
+            f"the branch and reference it from a shorter brief."
+        )
+    return lead_content
+
+
 def handle_outrider_trigger(
     repo, search_method, pin_arxiv, interest_id, ref, claude_timeout=None,
-    provider=None, model=None,
+    provider=None, model=None, mode=None, publish=None, start_from_ref=None,
+    lead_content=None, lead_content_file=None, staged_synthesis=False,
+    test_integration_policy=None, fidelity_policy=None, wait_for_slot=False,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -699,6 +1183,13 @@ def handle_outrider_trigger(
     implementation-call ceiling on a per-dispatch basis. Useful for very
     large monorepos where the default trips before the agent completes
     (especially when routing at slower non-Anthropic backends).
+
+    The refinement inputs — ``mode``, ``publish``, ``start_from_ref``,
+    ``lead_content``/``lead_content_file``, ``staged_synthesis``,
+    ``test_integration_policy``, ``fidelity_policy`` — reach the same workflow
+    inputs the two-tier refiner uses, so building on an existing branch (a
+    stalled third-party PR, yesterday's drafter output) or running a
+    brief-mode pass no longer means dropping to raw `gh workflow run`.
     """
     # Inputs validation
     if search_method and pin_arxiv:
@@ -710,6 +1201,7 @@ def handle_outrider_trigger(
             "--claude-timeout must be at least 60 seconds (a tighter value "
             "trips before the agent can finish even a small task)."
         )
+    lead = _resolve_lead_content(lead_content, lead_content_file)
 
     # Repo resolution
     resolved_repo = _normalize_repo(repo) if repo else _detect_github_repo_from_cwd()
@@ -755,7 +1247,29 @@ def handle_outrider_trigger(
         # hand-rolled workflows may need updating.
         "provider": provider or "",
         "model": model or "",
+        # Refinement inputs. `--ref` picks which branch the *workflow file*
+        # comes from; `start-from-ref` is what the agent builds ON — the two
+        # are not interchangeable. Undeclared inputs are dropped and retried
+        # (see _dispatch_with_input_fallback) so older installs still dispatch.
+        "mode": mode or "",
+        "publish": publish or "",
+        "start-from-ref": start_from_ref or "",
+        "lead-content": lead,
+        "staged-synthesis": "true" if staged_synthesis else "",
+        "test-integration-policy": test_integration_policy or "",
+        "fidelity-policy": fidelity_policy or "",
     }
+    supplied = {k: v for k, v in inputs.items() if v}
+    if len(supplied) > GH_MAX_DISPATCH_INPUTS:
+        raise click.UsageError(
+            f"{len(supplied)} inputs supplied ({', '.join(sorted(supplied))}) "
+            f"but GitHub accepts at most {GH_MAX_DISPATCH_INPUTS} per "
+            f"workflow_dispatch. Drop the ones the workflow's own defaults "
+            f"already cover."
+        )
+
+    # A pending run means this dispatch cancels it (static concurrency group).
+    _warn_or_wait_for_queue(resolved_repo, wait_for_slot)
 
     click.echo(f"Dispatching Outrider on {resolved_repo} (ref={branch})…")
     if provider:
@@ -770,14 +1284,38 @@ def handle_outrider_trigger(
         click.echo(f"  interest:       {interest_id}")
     if claude_timeout:
         click.echo(f"  claude-timeout: {claude_timeout}s")
+    if mode:
+        click.echo(f"  mode:           {mode}")
+    if publish:
+        click.echo(f"  publish:        {publish}")
+    if start_from_ref:
+        click.echo(f"  start-from-ref: {start_from_ref}")
+    if lead:
+        click.echo(f"  lead-content:   {len(lead)} chars")
+    if staged_synthesis:
+        click.echo("  staged-synthesis: true")
+    if test_integration_policy:
+        click.echo(f"  test-integration-policy: {test_integration_policy}")
+    if fidelity_policy:
+        click.echo(f"  fidelity-policy: {fidelity_policy}")
 
-    ok, stderr = _gh_dispatch_outrider(resolved_repo, branch, inputs)
+    ok, stderr, dropped = _dispatch_with_input_fallback(
+        resolved_repo, branch, inputs
+    )
     if not ok:
         hint = ""
         if "403" in stderr or "permission" in stderr.lower():
             hint = ("\n  Your gh token lacks the scope to dispatch workflows "
                     "on this repo. Re-auth: `gh auth login --scopes workflow`.")
         raise click.ClickException(f"workflow dispatch failed: {stderr}{hint}")
+    if dropped:
+        click.secho(
+            f"⚠ {resolved_repo}'s installed workflow doesn't declare: "
+            f"{', '.join(dropped)}. Dispatched without them (their baked "
+            f"defaults apply). Update the install to pick them up:\n"
+            f"    remyxai outrider init --repo {resolved_repo} --force",
+            fg="yellow",
+        )
 
     click.secho("✓ Dispatched.", fg="green", bold=True)
     url = _gh_latest_run_url(resolved_repo)
@@ -788,15 +1326,6 @@ def handle_outrider_trigger(
 
 
 # ─── set-provider-secret ──────────────────────────────────────────────────
-
-# Maps a provider name (matching the workflow's `provider` input choices)
-# to the GitHub Actions secret name the workflow's `Configure provider
-# auth` step reads. Each provider has a conventional env var name; we
-# mirror that convention here so customers don't have to look it up.
-_PROVIDER_SECRET_NAMES = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "zai": "ZAI_API_KEY",
-}
 
 # Length below which a "secret" is almost certainly truncated or a
 # placeholder. The action's startup auth-guard hard-fails below 8 chars;
@@ -816,10 +1345,11 @@ def handle_set_provider_secret(repo, provider, key_from):
     length before sending so a clearly-truncated value is rejected at
     the CLI boundary rather than after a wasted workflow run.
 
-    Provider name → secret name map:
+    Provider name → secret name map (``_PROVIDER_SECRET_NAMES``):
 
     - ``anthropic`` → ``ANTHROPIC_API_KEY``
     - ``zai`` → ``ZAI_API_KEY``
+    - ``moonshot`` → ``MOONSHOT_API_KEY``
     """
     if provider not in _PROVIDER_SECRET_NAMES:
         choices = ", ".join(sorted(_PROVIDER_SECRET_NAMES))
@@ -876,9 +1406,10 @@ def handle_set_provider_secret(repo, provider, key_from):
     click.secho(
         f"✓ Set {secret_name} on {resolved_repo}.", fg="green", bold=True,
     )
-    if provider == "zai":
+    default_model = {"zai": "glm-5.2", "moonshot": "kimi-k3"}.get(provider)
+    if default_model:
         click.echo(
             "  Next: `remyxai outrider trigger --repo "
-            f"{resolved_repo} --provider zai --model glm-5.2 "
+            f"{resolved_repo} --provider {provider} --model {default_model} "
             f"--pin-arxiv <arxiv-id>` to test."
         )
