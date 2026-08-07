@@ -1,7 +1,28 @@
 import os
 import logging
 
-BASE_URL = "https://engine.remyx.ai/api/v1.0"
+DEFAULT_BASE_URL = "https://engine.remyx.ai/api/v1.0"
+API_PATH = "/api/v1.0"
+
+
+def resolve_base_url(value=None):
+    """Engine API base URL, from ``REMYXAI_API_URL`` or the production default.
+
+    Accepts either a full API base (``https://host/api/v1.0``) or just an
+    origin (``http://localhost:5000``) — the version path is appended when it's
+    missing, so pointing the CLI at a test server is one env var and no
+    guessing about the prefix.
+    """
+    raw = (value if value is not None else os.getenv("REMYXAI_API_URL", "")).strip()
+    if not raw:
+        return DEFAULT_BASE_URL
+    raw = raw.rstrip("/")
+    return raw if API_PATH in raw else raw + API_PATH
+
+
+# Read once at import: callers do `from . import BASE_URL`, so the env var has
+# to be set before the CLI starts (the normal shell-export case).
+BASE_URL = resolve_base_url()
 
 
 def get_api_key(api_key=None):

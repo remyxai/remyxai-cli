@@ -33,6 +33,7 @@ from typing import NamedTuple, Optional
 
 import click
 
+from remyxai.api import BASE_URL, DEFAULT_BASE_URL
 from remyxai.api.interests import (
     get_interest,
     provision_action,
@@ -728,6 +729,11 @@ def handle_outrider_init(
         )
     click.echo("Plan:")
     click.echo(f"  - Repo:      {resolved_repo}")
+    if BASE_URL != DEFAULT_BASE_URL:
+        # Non-production engine (REMYXAI_API_URL). Say so — a test-server run
+        # that looks identical to a production one is how a "why didn't
+        # anything change" hour gets spent.
+        click.echo(f"  - Engine:    {BASE_URL}  (REMYXAI_API_URL override)")
     click.echo(f"  - Interest:  {interest_desc}")
     click.echo(f"  - Mode:      {mode} — {mode_desc}")
     click.echo(f"  - Setup:     {setup_desc}")
