@@ -476,3 +476,175 @@ def test_setup_local_help_lists_options():
                 "--anthropic-key", "--dry-run"):
         assert opt in result.output
     assert "--gh-pat" not in result.output   # dropped for v1
+
+
+# ─── per-stage backend routing beyond z.ai ──────────────────────────────────
+#
+# `_provider_for_model` used to special-case GLM and call everything else
+# Anthropic, so `--drafter-model kimi-k3` rendered the drafter against
+# ANTHROPIC_API_KEY, never asked for MOONSHOT_API_KEY, and produced a repo that
+# reported a clean install and then failed auth on its first run — the same
+# class of bug as remyxai/remyx#550, on the no-App path.
+
+class TestProviderInference:
+    def test_infers_every_registered_backend(self):
+        assert outrider_local.infer_provider("glm-5.2") == "zai"
+        assert outrider_local.infer_provider("kimi-k3") == "moonshot"
+        assert outrider_local.infer_provider("claude-opus-4-8") == "anthropic"
+
+    def test_is_case_insensitive(self):
+        assert outrider_local.infer_provider("Kimi-K3") == "moonshot"
+        assert outrider_local.infer_provider("GLM-5.2") == "zai"
+
+    def test_unknown_model_is_none_not_anthropic(self):
+        """The caller warns instead of silently assuming a backend."""
+        assert outrider_local.infer_provider("mystery-model-9") is None
+        assert outrider_local.infer_provider("") is None
+        assert outrider_local.infer_provider(None) is None
+
+    def test_provider_for_model_falls_back_to_the_template_default(self):
+        assert outrider_local._provider_for_model("mystery-model-9") == "anthropic"
+
+    def test_kimi_no_longer_resolves_to_anthropic(self):
+        assert outrider_local._provider_for_model("kimi-k3") == "moonshot"
+
+
+class TestProvidersForStages:
+    def test_unset_stages_count_as_the_template_default(self):
+        assert outrider_local.providers_for_stages(None, None, None) == ["anthropic"]
+
+    def test_kimi_drafter_pulls_in_moonshot(self):
+        assert outrider_local.providers_for_stages("kimi-k3", None, None) == \
+            ["anthropic", "moonshot"]
+
+    def test_three_backends_at_once(self):
+        assert outrider_local.providers_for_stages(
+            "kimi-k3", "glm-5.2", "claude-opus-4-8") == \
+            ["anthropic", "zai", "moonshot"]
+
+    def test_all_stages_on_one_non_default_backend_drops_anthropic(self):
+        assert outrider_local.providers_for_stages(
+            "glm-5.2", "glm-5.2", "glm-4.6") == ["zai"]
+
+    def test_unknown_models_are_reported(self):
+        assert outrider_local._unknown_stage_models("kimi-k3", "nope-1", None) == \
+            ["nope-1"]
+
+
+class TestMoonshotStageRendering:
+    def test_drafter_routes_at_moonshot(self):
+        with patch.object(outrider_local, "_fetch_outrider_template",
+                          return_value=_FAKE_DRAFTER_TEMPLATE):
+            wf = outrider_local._render_drafter_workflow("uuid", model="kimi-k3")
+        assert "ANTHROPIC_AUTH_TOKEN: ${{ secrets.MOONSHOT_API_KEY }}" in wf
+        assert "ANTHROPIC_API_KEY:" not in wf          # mutually exclusive
+        assert "ANTHROPIC_MODEL: kimi-k3" in wf
+        assert "model-base-url: https://api.moonshot.ai/anthropic" in wf
+
+    def test_refiner_gap_and_dispatch_route_at_moonshot(self):
+        with patch.object(outrider_local, "_fetch_outrider_template",
+                          return_value=_FAKE_REFINER_TEMPLATE):
+            wf = outrider_local._render_refiner_workflow(
+                gap_model="kimi-k3", refine_model="kimi-k3",
+            )
+        assert "https://api.moonshot.ai/anthropic/v1/messages" in wf
+        assert '"model": "kimi-k3"' in wf
+        assert "Bearer {os.environ['MOONSHOT_API_KEY']}" in wf
+        assert "MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}" in wf
+        assert "-f provider=moonshot" in wf
+        assert "-f model=kimi-k3" in wf
+
+    def test_zai_routing_is_unchanged(self):
+        """The registry rewrite must not regress the path that already worked."""
+        with patch.object(outrider_local, "_fetch_outrider_template",
+                          return_value=_FAKE_DRAFTER_TEMPLATE):
+            wf = outrider_local._render_drafter_workflow("uuid", model="glm-5.2")
+        assert "ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}" in wf
+        assert "model-base-url: https://api.z.ai/api/anthropic" in wf
+
+
+class TestTwoTierSecretCollection:
+    """The install must push a secret for every backend its stages use."""
+
+    def _run(self, monkeypatch, **kwargs):
+        pushed = {}
+        monkeypatch.setattr(outrider_local, "_resolve_interest_id",
+                            lambda *a, **k: "6a730cc4-010c-49ce-9c7f-6d9c59431739")
+        monkeypatch.setattr(outrider_local, "_gh_available", lambda: True)
+        monkeypatch.setattr(outrider_local, "_gh_authenticated", lambda: True)
+        monkeypatch.setattr(outrider_local, "_gh_set_secret",
+                            lambda repo, name, value: pushed.__setitem__(name, value))
+        monkeypatch.setattr(outrider_local, "_gh_default_branch", lambda r: "main")
+        monkeypatch.setattr(outrider_local, "_gh_branch_exists", lambda r, b: False)
+        monkeypatch.setattr(outrider_local, "_gh_get_branch_sha", lambda r, b: "sha")
+        monkeypatch.setattr(outrider_local, "_gh_create_branch", lambda r, b, s: None)
+        monkeypatch.setattr(outrider_local, "_gh_get_file_sha", lambda *a, **k: None)
+        monkeypatch.setattr(outrider_local, "_gh_put_file", lambda *a, **k: None)
+        monkeypatch.setattr(outrider_local, "_gh_open_pr",
+                            lambda *a, **k: ("https://github.com/o/r/pull/1", 1))
+        monkeypatch.setattr(outrider_local, "_gh_merge_pr", lambda r, n: True)
+        monkeypatch.setattr(outrider_local, "_gh_enable_pr_creation", lambda r: None)
+        monkeypatch.setattr(outrider_local, "_gh_dispatch", lambda r, b: True)
+        monkeypatch.setattr(outrider_local, "_render_drafter_workflow",
+                            lambda *a, **k: "drafter: yaml")
+        monkeypatch.setattr(outrider_local, "_render_refiner_workflow",
+                            lambda *a, **k: "refiner: yaml")
+        monkeypatch.setattr(outrider_local, "_render_local_workflow",
+                            lambda *a, **k: "main: yaml")
+        opts = dict(
+            repo="owner/name", interest_id="6a730cc4-010c-49ce-9c7f-6d9c59431739",
+            auto_interest=False, mode="review", two_tier=True, no_cocoindex=True,
+            anthropic_key=None, skip_confirm=True, dry_run=False,
+        )
+        opts.update(kwargs)
+        outrider_local.handle_outrider_setup_local(**opts)
+        return pushed
+
+    def test_kimi_drafter_pushes_moonshot_api_key(self, monkeypatch):
+        monkeypatch.setenv("REMYXAI_API_KEY", "rmx-test-key-000000000000")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "a" * 24)
+        monkeypatch.setenv("MOONSHOT_API_KEY", "sk-moon-" + "m" * 24)
+        pushed = self._run(monkeypatch, drafter_model="kimi-k3")
+        assert "MOONSHOT_API_KEY" in pushed, (
+            "a Kimi drafter with no MOONSHOT_API_KEY is the reported failure"
+        )
+        assert "ANTHROPIC_API_KEY" in pushed      # refiner stages still default
+        assert "REMYX_API_KEY" in pushed
+
+    def test_all_three_backends_are_pushed(self, monkeypatch):
+        monkeypatch.setenv("REMYXAI_API_KEY", "rmx-test-key-000000000000")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "a" * 24)
+        monkeypatch.setenv("ZAI_API_KEY", "zai-" + "z" * 24)
+        monkeypatch.setenv("MOONSHOT_API_KEY", "sk-moon-" + "m" * 24)
+        pushed = self._run(monkeypatch, drafter_model="kimi-k3",
+                           refiner_model="glm-5.2",
+                           refine_model="claude-opus-4-8")
+        assert {"REMYX_API_KEY", "ANTHROPIC_API_KEY", "ZAI_API_KEY",
+                "MOONSHOT_API_KEY"} <= set(pushed)
+
+    def test_single_backend_install_pushes_only_its_key(self, monkeypatch):
+        monkeypatch.setenv("REMYXAI_API_KEY", "rmx-test-key-000000000000")
+        monkeypatch.setenv("ZAI_API_KEY", "zai-" + "z" * 24)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+        pushed = self._run(monkeypatch, drafter_model="glm-5.2",
+                           refiner_model="glm-5.2", refine_model="glm-4.6")
+        assert set(pushed) == {"REMYX_API_KEY", "ZAI_API_KEY"}
+
+    def test_missing_key_for_a_used_backend_is_a_hard_error(self, monkeypatch):
+        monkeypatch.setenv("REMYXAI_API_KEY", "rmx-test-key-000000000000")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "a" * 24)
+        monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+        monkeypatch.setattr("click.prompt", lambda *a, **k: "")
+        with pytest.raises(click.ClickException, match="MOONSHOT_API_KEY"):
+            self._run(monkeypatch, drafter_model="kimi-k3")
+
+    def test_dry_run_does_not_prompt_for_secrets(self, monkeypatch, capsys):
+        monkeypatch.setenv("REMYXAI_API_KEY", "rmx-test-key-000000000000")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+        monkeypatch.setattr("click.prompt", lambda *a, **k: pytest.fail(
+            "--dry-run must not prompt for secrets"))
+        self._run(monkeypatch, drafter_model="kimi-k3", dry_run=True)
+        out = capsys.readouterr().out
+        assert "MOONSHOT_API_KEY (will prompt)" in out

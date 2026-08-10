@@ -221,12 +221,20 @@ def _gh_dispatch(repo: str, branch: str) -> bool:
 # `provider` case-switch is the complete change to add support — no
 # per-vendor CLI flags added by convention (existing --anthropic-key /
 # --zai-key are preserved for backward compat).
+# ``base_url`` is what makes a backend PROXIED: its key goes in
+# ANTHROPIC_AUTH_TOKEN with ANTHROPIC_BASE_URL pointing here, rather than in
+# ANTHROPIC_API_KEY (native). ``model_prefixes`` is how a per-stage
+# ``--drafter-model`` / ``--refiner-model`` names its backend without a separate
+# provider flag — the whole reason `kimi-k3` used to be treated as an Anthropic
+# model, rendered against ANTHROPIC_API_KEY, and died on its first run.
 _BACKEND_REGISTRY: dict = {
     "anthropic": {
         "secret_env": "ANTHROPIC_API_KEY",
         "default_model": "claude-opus-4-8",
         "default_claude_timeout": "900",
         "display_name": "Anthropic",
+        "base_url": None,
+        "model_prefixes": ("claude",),
     },
     "zai": {
         "secret_env": "ZAI_API_KEY",
@@ -236,6 +244,8 @@ _BACKEND_REGISTRY: dict = {
         # coding session enough headroom before hitting claude-timeout.
         "default_claude_timeout": "3600",
         "display_name": "z.ai (GLM)",
+        "base_url": "https://api.z.ai/api/anthropic",
+        "model_prefixes": ("glm",),
     },
     "moonshot": {
         "secret_env": "MOONSHOT_API_KEY",
@@ -245,8 +255,14 @@ _BACKEND_REGISTRY: dict = {
         # outrider action's docs/backends.md table.
         "default_claude_timeout": "3600",
         "display_name": "Moonshot (Kimi)",
+        "base_url": "https://api.moonshot.ai/anthropic",
+        "model_prefixes": ("kimi", "moonshot"),
     },
 }
+
+# The provider a stage falls back to when no model override names one — it's
+# what the @v1 two-tier templates ship with.
+_TEMPLATE_DEFAULT_PROVIDER = "anthropic"
 
 
 # ─── workflow rendering (inline; no Remyx App / bot-token step) ─────────────
@@ -494,16 +510,55 @@ _GAP_ZAI_AUTH = '"Authorization": f"Bearer {os.environ[\'ZAI_API_KEY\']}",'
 _GAP_ENV_ANCHOR = "REPO: ${{ github.repository }}"
 
 
+def infer_provider(model: str) -> Optional[str]:
+    """Backend a model name belongs to, or ``None`` when nothing matches.
+
+    Driven by ``_BACKEND_REGISTRY[*]["model_prefixes"]``, so adding a backend
+    teaches every stage of the two-tier install to route it. ``None`` is the
+    honest answer for an unrecognized name — the caller warns rather than
+    silently assuming Anthropic, which is how a Kimi drafter ended up rendered
+    against ANTHROPIC_API_KEY and dead on arrival.
+    """
+    name = (model or "").strip().lower()
+    if not name:
+        return None
+    for provider, cfg in _BACKEND_REGISTRY.items():
+        if any(name.startswith(p) for p in cfg["model_prefixes"]):
+            return provider
+    return None
+
+
 def _provider_for_model(model: str) -> str:
-    """Infer the backend provider from a model name. GLM models route at z.ai;
-    everything else (claude-*) uses the default Anthropic API."""
-    return "zai" if model.lower().startswith("glm") else "anthropic"
+    """``infer_provider`` with the template's default for unknown names."""
+    return infer_provider(model) or _TEMPLATE_DEFAULT_PROVIDER
+
+
+def providers_for_stages(*models) -> list:
+    """Providers a two-tier install actually uses, in registry order.
+
+    A stage with no model override keeps the template's provider, so that one
+    counts too — the install needs a key for every provider in this list, not
+    just for the overridden stages.
+    """
+    used = {
+        _provider_for_model(m) if m else _TEMPLATE_DEFAULT_PROVIDER
+        for m in models
+    }
+    return [p for p in _BACKEND_REGISTRY if p in used]
 
 
 def uses_zai(*models) -> bool:
-    """True if any supplied (non-empty) model resolves to the z.ai provider —
-    i.e. the install needs a ZAI_API_KEY secret."""
+    """True if any supplied (non-empty) model resolves to the z.ai provider.
+
+    Retained for callers that only ask about z.ai; prefer
+    ``providers_for_stages`` for "which secrets does this install need".
+    """
     return any(m and _provider_for_model(m) == "zai" for m in models)
+
+
+def _unknown_stage_models(*models) -> list:
+    """Model overrides whose backend can't be inferred from the name."""
+    return [m for m in models if m and infer_provider(m) is None]
 
 
 def _require_anchor(text: str, anchor: str, what: str) -> None:
@@ -516,39 +571,52 @@ def _require_anchor(text: str, anchor: str, what: str) -> None:
 
 
 def _apply_drafter_model(text: str, model: str) -> str:
-    """Rewrite the drafter's model (and, for GLM, its provider auth + base URL)."""
+    """Rewrite the drafter's model (and, for a proxied backend, its auth + base
+    URL)."""
     import re
     _require_anchor(text, "ANTHROPIC_MODEL:", "drafter")
     text = re.sub(r"(?m)^(\s*)ANTHROPIC_MODEL:.*$", rf"\g<1>ANTHROPIC_MODEL: {model}", text)
-    if _provider_for_model(model) == "zai":
-        # z.ai needs Bearer auth; ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN are
-        # mutually exclusive, so swap the env var rather than adding one.
+    reg = _BACKEND_REGISTRY[_provider_for_model(model)]
+    if reg["base_url"]:
+        # Proxied backends need Bearer auth; ANTHROPIC_API_KEY and
+        # ANTHROPIC_AUTH_TOKEN are mutually exclusive, so swap the env var
+        # rather than adding one.
         _require_anchor(text, _DRAFTER_ANTHROPIC_ENV, "drafter")
         _require_anchor(text, _DRAFTER_PUBLISH_ANCHOR, "drafter")
-        text = text.replace(_DRAFTER_ANTHROPIC_ENV, _DRAFTER_ZAI_ENV)
+        text = text.replace(
+            _DRAFTER_ANTHROPIC_ENV,
+            "ANTHROPIC_AUTH_TOKEN: ${{ secrets.%s }}" % reg["secret_env"],
+        )
         text = text.replace(
             _DRAFTER_PUBLISH_ANCHOR,
-            f"{_DRAFTER_PUBLISH_ANCHOR}\n          model-base-url: {_ZAI_BASE_URL}",
+            f"{_DRAFTER_PUBLISH_ANCHOR}\n          model-base-url: {reg['base_url']}",
             1,
         )
     return text
 
 
 def _apply_refiner_gap_model(text: str, model: str) -> str:
-    """Rewrite the refiner's gap-analysis LLM call (model, and for GLM the
-    endpoint + Bearer auth + ZAI_API_KEY step env)."""
+    """Rewrite the refiner's gap-analysis LLM call (model, and for a proxied
+    backend the endpoint + Bearer auth + that backend's step env)."""
     import re
     _require_anchor(text, '"model":', "refiner")
     text = re.sub(r'"model": "[^"]*"', f'"model": "{model}"', text, count=1)
-    if _provider_for_model(model) == "zai":
+    reg = _BACKEND_REGISTRY[_provider_for_model(model)]
+    if reg["base_url"]:
+        secret = reg["secret_env"]
         _require_anchor(text, _GAP_ANTHROPIC_URL, "refiner")
         _require_anchor(text, _GAP_ANTHROPIC_AUTH, "refiner")
         _require_anchor(text, _GAP_ENV_ANCHOR, "refiner")
-        text = text.replace(_GAP_ANTHROPIC_URL, _GAP_ZAI_URL)
-        text = text.replace(_GAP_ANTHROPIC_AUTH, _GAP_ZAI_AUTH)
+        text = text.replace(
+            _GAP_ANTHROPIC_URL, f'"{reg["base_url"]}/v1/messages"',
+        )
+        text = text.replace(
+            _GAP_ANTHROPIC_AUTH,
+            '"Authorization": f"Bearer {os.environ[\'%s\']}",' % secret,
+        )
         text = text.replace(
             _GAP_ENV_ANCHOR,
-            f"{_GAP_ENV_ANCHOR}\n          ZAI_API_KEY: ${{{{ secrets.ZAI_API_KEY }}}}",
+            f"{_GAP_ENV_ANCHOR}\n          {secret}: ${{{{ secrets.{secret} }}}}",
             1,
         )
     return text
@@ -696,7 +764,28 @@ def handle_outrider_setup_local(
         raise click.UsageError(
             "--drafter-model / --refiner-model / --refine-model require --two-tier."
         )
-    need_zai = uses_zai(drafter_model, refiner_model, refine_model)
+    # Every backend the two-tier stages actually route at — a stage with no
+    # override keeps the template's Anthropic default, so that counts too.
+    stage_providers = (
+        providers_for_stages(drafter_model, refiner_model, refine_model)
+        if two_tier else []
+    )
+    unknown_models = _unknown_stage_models(
+        drafter_model, refiner_model, refine_model,
+    )
+    if unknown_models:
+        click.secho(
+            f"⚠ can't tell which backend these models belong to: "
+            f"{', '.join(unknown_models)}. Treating them as "
+            f"{_TEMPLATE_DEFAULT_PROVIDER} — if that's wrong the stage will "
+            f"fail auth on its first run. Known prefixes: "
+            + "; ".join(
+                f"{p}→{'/'.join(c['model_prefixes'])}"
+                for p, c in _BACKEND_REGISTRY.items()
+            ),
+            fg="yellow",
+        )
+    need_zai = "zai" in stage_providers
 
     # 1. REMYX key (set as a repo secret + used to resolve the interest)
     remyx_key = os.environ.get("REMYXAI_API_KEY") or click.prompt(
@@ -707,37 +796,55 @@ def handle_outrider_setup_local(
 
     # 2. Backend secret resolution.
     #
-    # Two-tier keeps its historical behavior: Anthropic key is mandatory
-    # (drafter defaults to Haiku 4.5), zai key is prompted only when
-    # `need_zai` (a stage was routed at GLM).
+    # Two-tier needs a key for EVERY backend its stages route at — the drafter,
+    # the refiner's gap analysis, and the run the refiner dispatches can each
+    # sit at a different one. Collecting only Anthropic (+ z.ai when a GLM model
+    # appeared) is how `--drafter-model kimi-k3` produced a repo with no
+    # MOONSHOT_API_KEY that reported a clean install and then failed auth.
     #
     # Single-file path resolves ONE backend's secret — the selected
     # `backend` — from (in order) the legacy CLI flag if it matches the
     # backend name, the registry-declared env var, or an interactive
     # prompt. `moonshot` has no legacy flag and is env-or-prompt.
+    stage_secrets = {}
     if two_tier:
-        anthropic_key = anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not anthropic_key:
-            anthropic_key = click.prompt(
-                "ANTHROPIC_API_KEY (from console.anthropic.com)", hide_input=True
-            )
-        if not anthropic_key.strip():
-            raise click.ClickException(
-                "ANTHROPIC_API_KEY is required for the workflow."
-            )
-        if need_zai:
-            zai_key = zai_key or os.environ.get("ZAI_API_KEY") or os.environ.get("Z_AI_KEY")
-            if not zai_key:
-                zai_key = click.prompt(
-                    "ZAI_API_KEY (z.ai GLM Coding Plan) — a GLM model was selected",
+        # Legacy per-vendor flags stay honored as a key source.
+        preset = {"anthropic": anthropic_key, "zai": zai_key}
+        for provider in stage_providers:
+            reg = _BACKEND_REGISTRY[provider]
+            env_name = reg["secret_env"]
+            value = preset.get(provider) or os.environ.get(env_name)
+            if provider == "zai" and not value:
+                value = os.environ.get("Z_AI_KEY")     # historical alias
+            if not value and dry_run:
+                # A dry run changes nothing, so don't make the operator type
+                # two or three hidden secrets to see the plan.
+                stage_secrets[env_name] = None
+                continue
+            if not value:
+                why = (
+                    "the template default"
+                    if provider == _TEMPLATE_DEFAULT_PROVIDER
+                    else f"a {reg['display_name']} model was selected"
+                )
+                value = click.prompt(
+                    f"{env_name} ({reg['display_name']}) — {why}",
                     hide_input=True,
                 )
-            if not zai_key.strip():
+            if not (value or "").strip():
                 raise click.ClickException(
-                    "ZAI_API_KEY is required when any stage uses a GLM model."
+                    f"{env_name} is required: a two-tier stage routes at "
+                    f"{reg['display_name']}."
                 )
-        backend_secret_env = "ANTHROPIC_API_KEY"
-        backend_secret_value = anthropic_key
+            stage_secrets[env_name] = value
+            if provider == "anthropic":
+                anthropic_key = value
+            elif provider == "zai":
+                zai_key = value
+        # The install's primary secret (first in registry order) keeps the
+        # historical variable names the summary + rollback path read.
+        backend_secret_env = next(iter(stage_secrets))
+        backend_secret_value = stage_secrets[backend_secret_env]
     else:
         reg = _BACKEND_REGISTRY[backend]
         backend_secret_env = reg["secret_env"]
@@ -747,11 +854,13 @@ def handle_outrider_setup_local(
             legacy_flag_value
             or os.environ.get(backend_secret_env)
         )
-        if not backend_secret_value:
+        if not backend_secret_value and dry_run:
+            backend_secret_value = None          # see the two-tier note above
+        elif not backend_secret_value:
             backend_secret_value = click.prompt(
                 f"{backend_secret_env} ({display})", hide_input=True
             )
-        if not backend_secret_value.strip():
+        if backend_secret_value is not None and not backend_secret_value.strip():
             raise click.ClickException(
                 f"{backend_secret_env} is required for --backend {backend}."
             )
@@ -777,7 +886,12 @@ def handle_outrider_setup_local(
     click.echo(f"  - Repo:      {resolved_repo}")
     click.echo(f"  - Mode:      {mode} (auto = open + merge PR + dispatch; review = open PR only)")
     if two_tier:
-        secrets_line = "REMYX_API_KEY, ANTHROPIC_API_KEY" + (", ZAI_API_KEY" if need_zai else "")
+        secrets_line = ", ".join(
+            ["REMYX_API_KEY"] + [
+                name if value is not None else f"{name} (will prompt)"
+                for name, value in stage_secrets.items()
+            ]
+        )
     else:
         secrets_line = f"REMYX_API_KEY, {backend_secret_env}"
         if backend != "anthropic":
@@ -917,14 +1031,15 @@ def handle_outrider_setup_local(
         _gh_enable_pr_creation(resolved_repo)
         click.echo("✓ Enabled Actions PR creation on the repo")
 
-        # Secrets LAST (closest to success; least cleanup risk).
+        # Secrets LAST (closest to success; least cleanup risk). Two-tier pushes
+        # one per backend its stages route at — a stage whose secret is missing
+        # fails auth in under a second on its first run.
         _gh_set_secret(resolved_repo, "REMYX_API_KEY", remyx_key)
         click.echo("✓ Set REMYX_API_KEY")
-        _gh_set_secret(resolved_repo, backend_secret_env, backend_secret_value)
-        click.echo(f"✓ Set {backend_secret_env}")
-        if two_tier and need_zai:
-            _gh_set_secret(resolved_repo, "ZAI_API_KEY", zai_key)
-            click.echo("✓ Set ZAI_API_KEY")
+        for env_name, value in (stage_secrets or
+                                {backend_secret_env: backend_secret_value}).items():
+            _gh_set_secret(resolved_repo, env_name, value)
+            click.echo(f"✓ Set {env_name}")
     except Exception as e:
         if pr_number is not None:
             click.echo(f"  ↩ rolling back: closing PR #{pr_number}", err=True)
