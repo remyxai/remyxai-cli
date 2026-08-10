@@ -1012,19 +1012,32 @@ def outrider_setup_local(
                   "which sets ANTHROPIC_MODEL in the action's env. "
                   "Empty = provider picks its default."
               ))
+@click.option("--base-url", "base_url", default=None,
+              help=(
+                  "Anthropic-compatible endpoint URL to route the coding "
+                  "agent at (self-hosted model behind a litellm proxy, "
+                  "vLLM Anthropic shim, on-prem gateway, Cloudflare "
+                  "Access). Overrides the per-provider default. Requires "
+                  "the target workflow to declare a `base-url` "
+                  "workflow_dispatch input; older templates need "
+                  "`remyxai outrider init` re-run to pick this up."
+              ))
+@click.option("--publish", "publish", default=None,
+              type=click.Choice(["pr", "branch"]),
+              help=(
+                  "'pr' (default) opens a draft PR / Issue on the target "
+                  "repo. 'branch' produces the drafter branch without "
+                  "opening a PR — useful for dogfooding a run and "
+                  "reviewing the output before deciding what to publish. "
+                  "Requires the target workflow to declare a `publish` "
+                  "input (all CLI-generated templates do)."
+              ))
 @click.option("--mode", "mode", default=None,
               help=(
                   "Run mode. 'recommend' (the workflow default) runs the full "
                   "scout→implement flow; 'brief' produces the write-up without "
                   "implementing. Whatever the installed action version "
                   "supports."
-              ))
-@click.option("--publish", "publish", type=click.Choice(["pr", "branch"]),
-              default=None,
-              help=(
-                  "'pr' opens a PR/Issue (workflow default); 'branch' pushes a "
-                  "fork branch and opens nothing — the drafter behavior, for "
-                  "exploration without a maintainer-visible signal."
               ))
 @click.option("--start-from-ref", "start_from_ref", default=None,
               help=(
@@ -1071,10 +1084,11 @@ def outrider_setup_local(
                   "repo."
               ))
 def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
-                     claude_timeout, provider, model, mode, publish,
-                     start_from_ref, lead_content, lead_content_file,
-                     staged_synthesis, test_integration_policy,
-                     fidelity_policy, wait_for_slot):
+                     claude_timeout, provider, model, base_url, mode,
+                     publish, start_from_ref, lead_content,
+                     lead_content_file, staged_synthesis,
+                     test_integration_policy, fidelity_policy,
+                     wait_for_slot):
     """
     Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -1142,6 +1156,7 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
         claude_timeout=claude_timeout,
         provider=provider,
         model=model,
+        base_url=base_url,
         mode=mode,
         publish=publish,
         start_from_ref=start_from_ref,

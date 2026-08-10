@@ -1173,9 +1173,10 @@ def _resolve_lead_content(lead_content, lead_content_file):
 
 def handle_outrider_trigger(
     repo, search_method, pin_arxiv, interest_id, ref, claude_timeout=None,
-    provider=None, model=None, mode=None, publish=None, start_from_ref=None,
-    lead_content=None, lead_content_file=None, staged_synthesis=False,
-    test_integration_policy=None, fidelity_policy=None, wait_for_slot=False,
+    provider=None, model=None, base_url=None, mode=None, publish=None,
+    start_from_ref=None, lead_content=None, lead_content_file=None,
+    staged_synthesis=False, test_integration_policy=None,
+    fidelity_policy=None, wait_for_slot=False,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -1253,10 +1254,16 @@ def handle_outrider_trigger(
         # hand-rolled workflows may need updating.
         "provider": provider or "",
         "model": model or "",
+        # `base-url` routes the coding agent at a self-hosted or on-prem
+        # Anthropic-compatible endpoint (litellm proxy, vLLM shim,
+        # Cloudflare Access, etc). Overrides the per-provider default.
+        "base-url": base_url or "",
         # Refinement inputs. `--ref` picks which branch the *workflow file*
         # comes from; `start-from-ref` is what the agent builds ON — the two
-        # are not interchangeable. Undeclared inputs are dropped and retried
-        # (see _dispatch_with_input_fallback) so older installs still dispatch.
+        # are not interchangeable. `publish=branch` produces the drafter
+        # branch without opening a PR (dogfood / review-before-publish).
+        # Undeclared inputs are dropped and retried (see
+        # _dispatch_with_input_fallback) so older installs still dispatch.
         "mode": mode or "",
         "publish": publish or "",
         "start-from-ref": start_from_ref or "",
@@ -1282,6 +1289,10 @@ def handle_outrider_trigger(
         click.echo(f"  provider:       {provider}")
     if model:
         click.echo(f"  model:          {model}")
+    if base_url:
+        click.echo(f"  base-url:       {base_url}")
+    if publish:
+        click.echo(f"  publish:        {publish}")
     if search_method:
         click.echo(f"  search-method:  {search_method!r}")
     if pin_arxiv:
@@ -1292,8 +1303,6 @@ def handle_outrider_trigger(
         click.echo(f"  claude-timeout: {claude_timeout}s")
     if mode:
         click.echo(f"  mode:           {mode}")
-    if publish:
-        click.echo(f"  publish:        {publish}")
     if start_from_ref:
         click.echo(f"  start-from-ref: {start_from_ref}")
     if lead:
