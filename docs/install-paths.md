@@ -23,25 +23,25 @@ If the App isn't installed yet, the command surfaces the install link — accept
 
 ### Provider keys per tier
 
-The engine pushes one model-provider secret: the credential you connected at engine.remyx.ai/integrations. A two-tier install that names a *different* provider on a tier (`--drafter-provider zai` while your connected provider is Anthropic) therefore needs a second secret, and without it the repo provisions cleanly and then fails auth on its first run in a few hundred milliseconds:
+The engine pushes a secret for every provider your tiers name that you've connected, so a mixed-provider install needs nothing local. A tier pointed at a provider you have *not* connected (`--drafter-provider zai` with no z.ai credential) still needs a key from somewhere — without one the repo provisions cleanly and then fails auth on its first run in a few hundred milliseconds:
 
 ```
 ERROR ✗ auth check: ANTHROPIC_AUTH_TOKEN is not set — agent calls will fail with HTTP 401.
 ```
 
-`init` closes that gap: it works out which provider the engine covers, pushes every other tier's key from your shell (`ANTHROPIC_API_KEY` / `ZAI_API_KEY` / `MOONSHOT_API_KEY`, via `gh`), and refuses to provision at all when a tier has no key either way. The plan block spells the routing out before you confirm:
+`init` closes that gap: it works out which providers the engine covers, pushes any unconnected tier's key from your shell (`ANTHROPIC_API_KEY` / `ZAI_API_KEY` / `MOONSHOT_API_KEY`, via `gh`), and refuses to provision at all when a tier has no key either way. The plan block spells the routing out before you confirm:
 
 ```
 Plan:
   - Repo:      owner/name
   - Setup:     two-tier (default) — drafter zai:glm-5.2 + refiner anthropic, cron off
-  - Keys:      anthropic — pushed by the engine from your connected credential
-               zai — ZAI_API_KEY from this shell → repo secret
+  - Keys:      anthropic — pushed by the engine from your connected credential (workflow default)
+               zai — ZAI_API_KEY from this shell → repo secret (not connected server-side)
 ```
 
 `--dry-run` reports the same routing (and the same refusal) without changing anything. `--skip-key-check` provisions anyway if you intend to set the secret later with `outrider set-provider-secret`.
 
-An install whose every tier uses your connected provider — the ordinary case — needs no local key and no `gh` at all.
+An install whose tiers all use providers you've connected — the ordinary case, mixed or not — needs no local key and no `gh` at all.
 
 ### Changing a live install: `--force`
 
@@ -52,7 +52,7 @@ remyxai outrider init --repo owner/name --interest <uuid> \
   --refiner-provider moonshot --refiner-model kimi-k3 --force
 ```
 
-`--force` revokes the current installation first, which is what lets the provisioner re-drive every step and rewrite the workflow YAML in place (new setup PR, auto-merged in `auto` mode). It rotates the repo's `REMYX_API_KEY` as a side effect — the old key is revoked once the new one is live.
+`--force` tells the engine to skip that short-circuit and re-drive every step, rewriting the workflow YAML in place (new setup PR, auto-merged in `auto` mode). It needs an engine with force support (remyxai/remyx#558); older deployments ignore the flag and still report "already enabled".
 
 
 ## `outrider setup-local` — when the App can't be granted

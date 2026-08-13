@@ -293,6 +293,7 @@ def provision_action(
     workflow_filename: Optional[str] = None,
     phases: Optional[Dict[str, Any]] = None,
     model_provider: Optional[str] = None,
+    force: bool = False,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -321,10 +322,16 @@ def provision_action(
                     name the tier provider that has no other way in; it falls
                     back to the first connected provider when this one isn't
                     connected. Omit to keep that default.
+        force:      re-drive every step on a repo that's already fully
+                    installed. Without it the engine returns "Already enabled"
+                    and leaves the workflow files — and their tier config — as
+                    they are.
 
     Returns 202 { task_id, status_url }. Poll with poll_provision_action.
     """
     payload: Dict[str, Any] = {"auto_merge": auto_merge}
+    if force:
+        payload["force"] = True
     if model_provider:
         payload["model_provider"] = model_provider
     if repo_url:

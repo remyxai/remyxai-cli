@@ -80,50 +80,73 @@ def test_tier_providers_dedupes_in_tier_order():
 
 
 # ─── key routing ────────────────────────────────────────────────────────────
+#
+# The engine pushes a key for EVERY provider named across `phases` that the
+# account has connected (remyxai/remyx#558). So "connected" means "covered",
+# and the CLI's job is only the provider you haven't connected.
 
 def test_single_connected_provider_needs_no_local_key():
     """The ordinary install: the engine pushes it, `gh` never involved."""
     plan = _plan_provider_secrets(_phases("anthropic", "anthropic"),
                                   connected=["anthropic"])
-    assert plan.engine_provider == "anthropic"
+    assert plan.engine_providers == ("anthropic",)
+    assert plan.preferred == "anthropic"
     assert plan.pushes == []
     assert plan.missing == []
 
 
-def test_mixed_tiers_without_a_local_key_is_missing():
-    """The reported failure: drafter at z.ai, only Anthropic connected."""
+def test_both_connected_tiers_are_covered_server_side():
+    """The relaxation: two connected providers, no local keys, no refusal.
+
+    Before the engine pushed per-tier keys this refused with "no API key for:
+    moonshot" — correct then, wrong once the engine covers both.
+    """
+    plan = _plan_provider_secrets(_phases("zai", "moonshot"),
+                                  connected=["zai", "moonshot"])
+    assert plan.engine_providers == ("zai", "moonshot")
+    assert plan.pushes == []
+    assert plan.missing == []
+    _validate_provider_keys(plan)          # no raise
+
+
+def test_preferred_is_the_capable_tier():
+    """`model_provider` decides the workflow's baked default, so the refiner
+    (later tier) wins over the cheap drafter when both are covered."""
+    plan = _plan_provider_secrets(_phases("zai", "anthropic"),
+                                  connected=["zai", "anthropic"])
+    assert plan.preferred == "anthropic"
+
+
+def test_unconnected_tier_without_a_local_key_is_missing():
+    """The reported failure: drafter at z.ai, no z.ai credential anywhere."""
     plan = _plan_provider_secrets(_phases("zai", "anthropic"),
                                   connected=["anthropic"])
-    assert plan.engine_provider == "anthropic"
+    assert plan.engine_providers == ("anthropic",)
     assert plan.missing == ["zai"]
 
 
-def test_mixed_tiers_push_the_other_tier_from_the_environment(monkeypatch):
+def test_unconnected_tier_is_pushed_from_the_environment(monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", FAKE_KEY)
     plan = _plan_provider_secrets(_phases("zai", "anthropic"),
                                   connected=["anthropic"])
-    assert plan.engine_provider == "anthropic"
+    assert plan.engine_providers == ("anthropic",)
     assert plan.pushes == [("zai", "ZAI_API_KEY", FAKE_KEY)]
     assert plan.missing == []
 
 
-def test_engine_covers_a_connected_provider_over_a_local_push(monkeypatch):
-    """A key in the shell doesn't drag `gh` into a single-provider install."""
+def test_connected_provider_is_never_pushed_locally(monkeypatch):
+    """A key in the shell doesn't drag `gh` into an install the engine covers."""
     monkeypatch.setenv("ZAI_API_KEY", FAKE_KEY)
     plan = _plan_provider_secrets(_phases("zai", "zai"), connected=["zai"])
-    assert plan.engine_provider == "zai"
+    assert plan.engine_providers == ("zai",)
     assert plan.pushes == []
 
 
-def test_engine_is_handed_the_tier_it_alone_can_cover(monkeypatch):
-    """Both tiers connected, one also keyed locally → the engine takes the
-    other one, so a single engine-side push plus one local push covers both."""
-    monkeypatch.setenv("ZAI_API_KEY", FAKE_KEY)
-    plan = _plan_provider_secrets(_phases("zai", "moonshot"),
-                                  connected=["zai", "moonshot"])
-    assert plan.engine_provider == "moonshot"
-    assert plan.pushes == [("zai", "ZAI_API_KEY", FAKE_KEY)]
-    assert plan.missing == []
+def test_a_connected_provider_is_never_missing(monkeypatch):
+    for tiers in (("zai", "moonshot"), ("anthropic", "zai"), ("moonshot", None)):
+        plan = _plan_provider_secrets(
+            _phases(*tiers), connected=["anthropic", "zai", "moonshot"])
+        assert plan.missing == [], tiers
 
 
 def test_moonshot_tier_pushes_moonshot_api_key(monkeypatch):
@@ -137,23 +160,24 @@ def test_nothing_connected_and_nothing_local_is_missing_anthropic():
     """No tier names a provider and nothing is connected: the engine bakes
     anthropic into the workflow, so that's the key the repo will need."""
     plan = _plan_provider_secrets(_phases(), connected=[])
-    assert plan.engine_provider is None
+    assert plan.engine_providers == ()
+    assert plan.preferred is None
     assert plan.missing == ["anthropic"]
 
 
-def test_inline_anthropic_key_counts_as_the_engine_provider():
+def test_inline_anthropic_key_is_covered_by_the_engine():
     """--anthropic-key gets connected during preflight → the engine pushes it,
     so this stays a no-`gh` install."""
     plan = _plan_provider_secrets(_phases(), connected=[],
                                   anthropic_key=FAKE_KEY)
-    assert plan.engine_provider == "anthropic"
+    assert plan.engine_providers == ("anthropic",)
     assert plan.pushes == []
     assert plan.missing == []
 
 
 def test_unpinned_tiers_follow_the_connected_provider():
     plan = _plan_provider_secrets(_phases(), connected=["moonshot"])
-    assert plan.engine_provider == "moonshot"
+    assert plan.engine_providers == ("moonshot",)
     assert plan.missing == []
 
 
@@ -280,95 +304,46 @@ def test_dry_run_surfaces_the_missing_key(monkeypatch):
 
 
 # ─── --force ────────────────────────────────────────────────────────────────
+#
+# Provisioning short-circuits with "Already enabled" on a fully-installed repo,
+# which also skips workflow rewriting. `--force` is the engine flag that
+# re-drives every step; the CLI used to fake it by revoking the installation
+# first, which rotated the repo's REMYX_API_KEY as a side effect.
 
-def _install(repo="owner/repo", interest=UID, revoked=False, iid="inst-1"):
-    return {"id": iid, "repo_full_name": repo, "interest_id": interest,
-            "revoked": revoked, "label": "rmxa-owner-repo"}
-
-
-def test_force_revokes_the_live_install_before_provisioning(monkeypatch):
+def _init_and_capture(monkeypatch, **kwargs):
     completed = {"status": "completed", "result": {"merged": True}}
-    order = []
     with patch.object(outrider_actions, "get_interest", return_value={"id": UID}), \
          patch.object(outrider_actions, "is_app_installed", return_value=True), \
          patch.object(outrider_actions, "get_integration_status",
                       side_effect=_connected("anthropic")), \
          patch.object(outrider_actions, "_kick_off_recommendations"), \
-         patch.object(outrider_actions, "list_installations",
-                      return_value=[_install()]), \
-         patch.object(outrider_actions, "revoke_installation",
-                      side_effect=lambda *a, **k: order.append("revoke")
-                      or {"revoked": True}) as rev, \
-         patch.object(outrider_actions, "provision_action",
-                      side_effect=lambda *a, **k: order.append("provision")
-                      or {"task_id": "t1"}), \
-         patch.object(outrider_actions, "poll_provision_action",
-                      return_value=completed):
-        _init(monkeypatch, force=True)
-    rev.assert_called_once()
-    assert rev.call_args[0][0] == "inst-1"
-    assert order == ["revoke", "provision"]
-
-
-def test_force_ignores_other_repos_and_already_revoked_installs(monkeypatch):
-    completed = {"status": "completed", "result": {"merged": True}}
-    installs = [
-        _install(repo="other/repo", iid="inst-other"),
-        _install(revoked=True, iid="inst-dead"),
-        _install(interest="11111111-2222-3333-4444-555555555555",
-                 iid="inst-otherinterest"),
-    ]
-    with patch.object(outrider_actions, "get_interest", return_value={"id": UID}), \
-         patch.object(outrider_actions, "is_app_installed", return_value=True), \
-         patch.object(outrider_actions, "get_integration_status",
-                      side_effect=_connected("anthropic")), \
-         patch.object(outrider_actions, "_kick_off_recommendations"), \
-         patch.object(outrider_actions, "list_installations",
-                      return_value=installs), \
-         patch.object(outrider_actions, "revoke_installation") as rev, \
          patch.object(outrider_actions, "provision_action",
                       return_value={"task_id": "t1"}) as prov, \
          patch.object(outrider_actions, "poll_provision_action",
                       return_value=completed):
-        _init(monkeypatch, force=True)
-    rev.assert_not_called()      # nothing of ours to force
-    prov.assert_called_once()    # …but the install still proceeds
+        _init(monkeypatch, **kwargs)
+    return prov
 
 
-def test_no_force_leaves_an_existing_install_alone(monkeypatch):
-    completed = {"status": "completed", "result": {"merged": True}}
-    with patch.object(outrider_actions, "get_interest", return_value={"id": UID}), \
-         patch.object(outrider_actions, "is_app_installed", return_value=True), \
-         patch.object(outrider_actions, "get_integration_status",
-                      side_effect=_connected("anthropic")), \
-         patch.object(outrider_actions, "_kick_off_recommendations"), \
-         patch.object(outrider_actions, "list_installations") as ls, \
-         patch.object(outrider_actions, "revoke_installation") as rev, \
-         patch.object(outrider_actions, "provision_action",
-                      return_value={"task_id": "t1"}), \
-         patch.object(outrider_actions, "poll_provision_action",
-                      return_value=completed):
-        _init(monkeypatch)
-    ls.assert_not_called()
-    rev.assert_not_called()
+def test_force_is_sent_to_the_engine(monkeypatch):
+    prov = _init_and_capture(monkeypatch, force=True)
+    assert prov.call_args.kwargs["force"] is True
 
 
-def test_connected_but_unpushable_tier_says_why():
-    """A connected provider can still be keyless in the repo: the engine
-    pushes ONE key per install, and that push went to the other tier."""
-    plan = _plan_provider_secrets(_phases("zai", "anthropic"),
-                                  connected=["anthropic", "zai"])
-    assert plan.missing == ["anthropic"]
-    line = [l for l in outrider_actions._describe_key_plan(plan)
-            if l.startswith("anthropic")][0]
-    assert "it's connected" in line
-    assert "only one key per install" in line
+def test_force_defaults_off(monkeypatch):
+    prov = _init_and_capture(monkeypatch)
+    assert prov.call_args.kwargs["force"] is False
 
-    with pytest.raises(click.ClickException) as e:
-        _validate_provider_keys(plan)
-    # No point telling them to connect something they already connected.
-    assert "connect the provider" not in e.value.message
-    assert "point every tier at one provider" in e.value.message
+
+def test_no_revoke_workaround_remains():
+    """The revoke path rotated REMYX_API_KEY just to get a rewrite."""
+    assert not hasattr(outrider_actions, "_revoke_installation_for")
+    assert not hasattr(outrider_actions, "revoke_installation")
+
+
+def test_preferred_provider_is_sent_as_model_provider(monkeypatch):
+    prov = _init_and_capture(monkeypatch)
+    assert prov.call_args.kwargs["model_provider"] == "claude_code"
 
 
 def test_unconnected_tier_is_told_to_connect_it():
@@ -380,3 +355,11 @@ def test_unconnected_tier_is_told_to_connect_it():
     with pytest.raises(click.ClickException) as e:
         _validate_provider_keys(plan)
     assert "connect the provider" in e.value.message
+    assert "ZAI_API_KEY" in e.value.message
+
+
+def test_plan_marks_the_workflow_default():
+    plan = _plan_provider_secrets(_phases("zai", "anthropic"),
+                                  connected=["zai", "anthropic"])
+    lines = outrider_actions._describe_key_plan(plan)
+    assert any("workflow default" in l and l.startswith("anthropic") for l in lines)

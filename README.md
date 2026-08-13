@@ -62,10 +62,12 @@ remyxai outrider init --repo your-org/your-repo --auto-interest --single-tier
 Every tier needs its provider's API key in the repo, or the first run fails
 auth in under a second. `init` handles both halves:
 
-- the provider you connected at engine.remyx.ai/integrations is pushed
-  server-side by the engine;
-- any **other** provider a tier names is pushed by `init` from this shell —
-  `ANTHROPIC_API_KEY`, `ZAI_API_KEY`, or `MOONSHOT_API_KEY` (via `gh`).
+- every provider you've connected at engine.remyx.ai/integrations is pushed
+  server-side by the engine — one per tier, so mixing providers needs nothing
+  local;
+- a tier pointed at a provider you **haven't** connected is pushed by `init`
+  from this shell — `ANTHROPIC_API_KEY`, `ZAI_API_KEY`, or `MOONSHOT_API_KEY`
+  (via `gh`).
 
 A tier with no key either way stops the command **before** anything is
 provisioned; `--dry-run` reports the same routing. Setting a key on a repo

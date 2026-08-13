@@ -21,9 +21,9 @@ See also: [method-targeted-runs.md](method-targeted-runs.md) for `outrider trigg
 
 ### Provider keys and re-provisioning
 
-`init` routes each tier's provider key to the repo: the provider you connected on engine.remyx.ai is pushed server-side, and any other provider a tier names is pushed from your shell (`ANTHROPIC_API_KEY` / `ZAI_API_KEY` / `MOONSHOT_API_KEY`). A tier with no key stops the command before provisioning — `--skip-key-check` overrides.
+`init` routes each tier's provider key to the repo: every provider you've connected on engine.remyx.ai is pushed server-side, and a tier pointed at a provider you haven't connected is pushed from your shell (`ANTHROPIC_API_KEY` / `ZAI_API_KEY` / `MOONSHOT_API_KEY`). A tier with no key either way stops the command before provisioning — `--skip-key-check` overrides.
 
-Provisioning is idempotent: an already-installed repo reports "already enabled" and its workflow files are left alone. Use `--force` to change a live install's tier config (it revokes the install so the engine re-drives, which rotates the repo's `REMYX_API_KEY`).
+Provisioning is idempotent: an already-installed repo reports "already enabled" and its workflow files are left alone. Use `--force` to change a live install's tier config — the engine re-drives every step and rewrites the workflow files.
 
 ## Papers
 

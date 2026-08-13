@@ -634,11 +634,11 @@ def outrider():
               help="Model id for the weekly refiner tier only (two-tier).")
 @click.option("--force", "force", is_flag=True, default=False,
               help=(
-                  "Re-provision a repo that's already set up: revokes the "
-                  "current install so the engine rewrites the workflow files "
-                  "with this tier config (without it, provisioning reports "
-                  "\"already enabled\" and leaves them alone). Rotates the "
-                  "repo's REMYX_API_KEY."
+                  "Re-provision a repo that's already set up, so the engine "
+                  "rewrites its workflow files with this tier config. Without "
+                  "it, provisioning reports \"already enabled\" and leaves "
+                  "them alone. Requires an engine with force support "
+                  "(remyxai/remyx#558); older ones ignore it."
               ))
 @click.option("--skip-key-check", "skip_key_check", is_flag=True, default=False,
               help=(

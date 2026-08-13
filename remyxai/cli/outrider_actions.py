@@ -39,7 +39,6 @@ from remyxai.api.interests import (
     provision_action,
     poll_provision_action,
 )
-from remyxai.api.outrider import list_installations, revoke_installation
 from remyxai.cli.interest_actions import (
     RepoAnalysisError,
     create_interest_from_repo,
@@ -340,25 +339,30 @@ def _ensure_model_provider(anthropic_key, api_key, connected=None):
 # A two-tier install can name a different provider per tier, but the engine
 # pushes exactly ONE model-provider secret (the connected credential it
 # resolves for the install — see resolve_model_provider_key). So a repo whose
-# drafter runs at z.ai while the account's connected provider is Anthropic
-# provisions clean and then dies on its first run in a few hundred
-# milliseconds ("ANTHROPIC_AUTH_TOKEN is not set"). `init` closes that gap:
-# it decides up front which provider the engine covers, pushes every other
-# tier's key itself from this machine's environment, and refuses to provision
-# at all when a tier has no key anywhere.
+# drafter runs at z.ai while the account has no z.ai credential provisions clean
+# and then dies on its first run in a few hundred milliseconds
+# ("ANTHROPIC_AUTH_TOKEN is not set").
+#
+# The engine (remyxai/remyx#558) pushes a key for EVERY provider named across
+# `phases` that the account has connected, so a provider you've connected needs
+# nothing from this machine. What's left for the CLI is the provider you haven't
+# connected: its key comes from this shell, or the install is refused before
+# anything is provisioned.
 
 class ProviderKeyPlan(NamedTuple):
     """How each tier provider's API key reaches the repo.
 
-    engine_provider: workflow value of the provider the engine pushes from the
-        account's connected credential (``None`` when it covers nothing).
-    pushes: ``(provider, secret_name, key)`` this CLI must push with `gh`.
-    missing: providers whose key won't reach the repo — a hard failure. A
-        provider can be connected and still land here: the engine pushes one
-        key per install, so a second tier's key has to come from this shell.
+    engine_providers: workflow values the engine pushes from connected
+        credentials (every tier provider you've connected).
+    preferred: the provider to name as ``model_provider`` — it decides which
+        credential the engine bakes as the workflow's default.
+    pushes: ``(provider, secret_name, key)`` this CLI must push with `gh` —
+        only providers that aren't connected.
+    missing: providers with no key anywhere — a hard failure.
     connected: the account's connected providers, for diagnosis.
     """
-    engine_provider: Optional[str]
+    engine_providers: tuple
+    preferred: Optional[str]
     pushes: list
     missing: list
     connected: tuple = ()
@@ -403,48 +407,48 @@ def _plan_provider_secrets(phases, connected, anthropic_key=None):
     )
     env = {p: _provider_env_key(p, anthropic_key) for p in tiers}
 
-    # Hand the engine whichever tier provider we CAN'T push from here, so the
-    # ordinary single-provider install still needs no `gh` and no local key.
-    engine_provider = (
-        next((p for p in tiers if p in connected and not env[p]), None)
-        or next((p for p in tiers if p in connected), None)
-    )
-    if engine_provider is None and not connected and env.get("anthropic"):
+    # Every tier provider you've connected is covered server-side.
+    engine_providers = [p for p in tiers if p in connected]
+    if not engine_providers and not connected and env.get("anthropic"):
         # Nothing connected, but --anthropic-key / $ANTHROPIC_API_KEY gets
         # connected inline during preflight — the engine pushes that one.
-        engine_provider = "anthropic"
+        engine_providers = ["anthropic"]
+
+    # `model_provider` decides which credential the engine bakes as the
+    # workflow's default, so name the capable tier (refiner/main) when it's
+    # covered; otherwise the first covered tier.
+    late_tiers = [p for p in reversed(tiers) if p in engine_providers]
+    preferred = late_tiers[0] if late_tiers else None
 
     pushes = [
         (p, _PROVIDER_SECRET_NAMES[p], key)
-        for p, key in env.items() if key and p != engine_provider
+        for p, key in env.items() if key and p not in engine_providers
     ]
-    missing = [p for p in tiers if not env[p] and p != engine_provider]
-    return ProviderKeyPlan(engine_provider, pushes, missing, tuple(connected))
+    missing = [p for p in tiers if not env[p] and p not in engine_providers]
+    return ProviderKeyPlan(
+        tuple(engine_providers), preferred, pushes, missing, tuple(connected),
+    )
 
 
 def _describe_key_plan(plan):
     """One plan line per provider: how its key reaches the repo."""
     lines = []
-    if plan.engine_provider:
+    for provider in plan.engine_providers:
+        default = " (workflow default)" if provider == plan.preferred else ""
         lines.append(
-            f"{plan.engine_provider} — pushed by the engine from your "
-            f"connected credential"
+            f"{provider} — pushed by the engine from your connected "
+            f"credential{default}"
         )
     for provider, secret_name, _ in plan.pushes:
-        lines.append(f"{provider} — {secret_name} from this shell → repo secret")
+        lines.append(
+            f"{provider} — {secret_name} from this shell → repo secret "
+            f"(not connected server-side)"
+        )
     for provider in plan.missing:
-        secret_name = _PROVIDER_SECRET_NAMES[provider]
-        if provider in plan.connected:
-            # Connected, but the engine pushes one key per install and that
-            # push is already committed to another tier's provider.
-            lines.append(
-                f"{provider} — NO KEY ({secret_name} unset here; it's "
-                f"connected, but the engine pushes only one key per install)"
-            )
-        else:
-            lines.append(
-                f"{provider} — NO KEY ({secret_name} unset, not connected)"
-            )
+        lines.append(
+            f"{provider} — NO KEY ({_PROVIDER_SECRET_NAMES[provider]} unset, "
+            f"not connected)"
+        )
     return lines
 
 
@@ -465,14 +469,13 @@ def _validate_provider_keys(plan, skip_key_check=False):
             f"    - export {secret_name}=… and re-run (init pushes it to the "
             f"repo as a secret)"
         )
-    if not all(p in plan.connected for p in plan.missing):
-        fixes.append(
-            "    - connect the provider at engine.remyx.ai/integrations, then "
-            "re-run"
-        )
     fixes.append(
-        "    - point every tier at one provider "
-        "(--provider), so the engine's single key push covers them all"
+        "    - connect the provider at engine.remyx.ai/integrations, then "
+        "re-run (the engine pushes a key for every provider you've connected)"
+    )
+    fixes.append(
+        "    - point that tier at a provider you have connected (--provider / "
+        "--drafter-provider / --refiner-provider)"
     )
     message = (
         f"no API key for: {', '.join(plan.missing)}.\n"
@@ -528,48 +531,6 @@ def _push_provider_secrets(repo, pushes):
             )
         click.echo(f"  Setting {secret_name} on {repo} (provider={provider})…")
         _gh_set_secret(repo, secret_name, key)
-
-
-# ─── forced re-provisioning ────────────────────────────────────────────────
-
-def _revoke_installation_for(repo, interest_id, api_key):
-    """Revoke the live install for interest+repo so a re-provision re-drives.
-
-    Provisioning is idempotent server-side and returns "Already enabled" once a
-    repo is fully installed — which also means it never rewrites the workflow
-    files, so a wrong tier provider is permanent through the CLI. A revoked row
-    skips that short-circuit: the provisioner re-runs every step and updates
-    the workflow YAML in place (new setup PR, auto-merged in `auto` mode).
-
-    Returns True when an install was revoked, False when there was nothing to
-    revoke (a fresh repo — `--force` is then a no-op).
-    """
-    try:
-        installs = list_installations(api_key=api_key)
-    except Exception as e:
-        raise click.ClickException(
-            f"--force couldn't list your Outrider installations: {e}"
-        )
-    live = [
-        row for row in installs
-        if row.get("repo_full_name") == repo
-        and str(row.get("interest_id")) == str(interest_id)
-        and not row.get("revoked")
-    ]
-    if not live:
-        return False
-    for row in live:
-        try:
-            revoke_installation(row["id"], api_key=api_key)
-        except Exception as e:
-            raise click.ClickException(
-                f"--force couldn't revoke installation {row.get('id')}: {e}"
-            )
-        click.echo(
-            f"  ✓ Revoked the current install ({row.get('label') or row['id']})"
-            f" — the workflow files stay put and get rewritten below."
-        )
-    return True
 
 
 def _wait_for_provision(interest_id, task_id, api_key, sleep=time.sleep):
@@ -742,8 +703,8 @@ def handle_outrider_init(
             click.echo(f"  {'- Keys:     ' if i == 0 else '              '}{line}")
     if force:
         click.echo(
-            "  - Force:     revoke the existing install first so the workflows "
-            "get rewritten (rotates the repo's REMYX_API_KEY)"
+            "  - Force:     re-drive provisioning on an already-installed "
+            "repo so the workflow files get rewritten with this tier config"
         )
     click.echo(
         "  - The engine installs everything server-side as remyx-ai[bot]; "
@@ -807,25 +768,16 @@ def handle_outrider_init(
     # 7. Provision (server-side, bot-authored). `phases` + the key routing were
     # resolved in step 3 from the account's connected providers — no vendor is
     # hardcoded.
-    if force:
-        click.echo("\nForcing a re-provision…")
-        if not _revoke_installation_for(
-            resolved_repo, resolved_interest, api_key
-        ):
-            click.echo(
-                "  (nothing provisioned for this interest+repo yet — "
-                "--force is a no-op)"
-            )
     auto_merge = (mode == "auto")
     click.echo("\nProvisioning Outrider via engine.remyx.ai…")
     resp = provision_action(
         resolved_interest, repo_url=repo_url,
-        auto_merge=auto_merge, phases=phases,
-        # Name the provider whose connected key the engine should push: the
-        # tier provider we can't push from here. Left unset it takes the first
-        # connected provider, which on a mixed-provider install can be the one
-        # tier that already had its key.
-        model_provider=PROVIDER_INTEGRATION_IDS.get(key_plan.engine_provider),
+        auto_merge=auto_merge, phases=phases, force=force,
+        # Names which connected credential the engine bakes as the workflow's
+        # default — it pushes a key for every connected tier provider either
+        # way. Unset, it would take the first connected provider, which on a
+        # mixed install isn't necessarily the capable tier.
+        model_provider=PROVIDER_INTEGRATION_IDS.get(key_plan.preferred),
         api_key=api_key,
     )
     task_id = resp.get("task_id")
