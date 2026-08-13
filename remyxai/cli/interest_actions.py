@@ -611,6 +611,17 @@ def handle_interests_create_from_repo(
             "       🧪 experiment-history extraction dispatched "
             f"(task: {created['history_extraction_task_id']})"
         )
+    # The profile is derived from a sampled snapshot of the repo, so on a large
+    # multi-domain codebase it can under-represent subsystems that haven't
+    # changed lately. Nothing fails when it does — the recommendations just
+    # skew — so it's worth a look before the first run. Same nudge `outrider
+    # init --auto-interest` prints.
+    click.echo(
+        "       ⓘ Skim the generated profile before the first run:\n"
+        f"           remyxai interests get -i {created['id']}\n"
+        f"           remyxai interests update -i {created['id']} -c "
+        f"\"<accurate description>\"   # then: remyxai papers refresh"
+    )
     if created.get("provision_task_id"):
         mode_label = (
             "auto-merge + first run" if automate == "auto" else "setup PR for review"

@@ -210,6 +210,15 @@ def test_outrider_init_passes_args_through(mock_handler):
         auto_interest=False,
         mode="review",
         anthropic_key=None,
+        single_tier=False,
+        provider=None,
+        model=None,
+        drafter_provider=None,
+        drafter_model=None,
+        refiner_provider=None,
+        refiner_model=None,
+        force=False,
+        skip_key_check=False,
         skip_confirm=True,
         dry_run=False,
         no_wait=False,
@@ -245,11 +254,18 @@ def test_outrider_init_mutual_exclusion(monkeypatch):
 
 # ─── --dry-run no-mutation contract ──────────────────────────────────────────
 
-def test_dry_run_makes_no_api_calls(monkeypatch):
-    """--dry-run prints the plan and touches no engine endpoint."""
+def test_dry_run_changes_nothing(monkeypatch):
+    """--dry-run prints the plan and mutates nothing, anywhere.
+
+    It DOES read integration status: the plan reports which provider key
+    reaches the repo how, and that read is what lets a tier with no key fail
+    on the dry run instead of one provisioned repo later.
+    """
     monkeypatch.setenv("REMYXAI_API_KEY", "k")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "x" * 20)
     with patch.object(outrider_actions, "is_app_installed") as inst, \
-         patch.object(outrider_actions, "get_integration_status") as gs, \
+         patch.object(outrider_actions, "get_integration_status",
+                      return_value={"connected": True}) as gs, \
          patch.object(outrider_actions, "create_interest_from_repo") as ci, \
          patch.object(outrider_actions, "get_interest") as gi, \
          patch.object(outrider_actions, "provision_action") as prov:
@@ -258,8 +274,9 @@ def test_dry_run_makes_no_api_calls(monkeypatch):
             auto_interest=False, mode="auto", anthropic_key=None,
             skip_confirm=True, dry_run=True, no_wait=False,
         )
-    for m in (inst, gs, ci, gi, prov):
+    for m in (inst, ci, gi, prov):
         m.assert_not_called()
+    assert gs.called  # read-only preflight
 
 
 # ─── mode=off: interest only, no provisioning ────────────────────────────────

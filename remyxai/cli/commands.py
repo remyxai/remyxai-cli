@@ -25,6 +25,7 @@ from remyxai.cli.interest_actions import (
     handle_interests_toggle,
 )
 from remyxai.cli.outrider_actions import (
+    PROVIDER_CHOICES,
     _parse_bulk_repos_tsv,
     _run_bulk,
     handle_outrider_init,
@@ -593,6 +594,59 @@ def outrider():
                   "(Claude Code). Falls back to $ANTHROPIC_API_KEY. Only used "
                   "if one isn't already connected."
               ))
+@click.option("--single-tier", "single_tier", is_flag=True, default=False,
+              help=(
+                  "Install the plain single-file workflow instead of the "
+                  "default two-tier drafter/refiner setup."
+              ))
+@click.option("--provider", "provider",
+              type=click.Choice(PROVIDER_CHOICES),
+              default=None,
+              help=(
+                  "Model provider for BOTH tiers: anthropic (Claude Code), "
+                  "zai (Z.ai), or moonshot (Moonshot AI). Defaults to your "
+                  "connected provider. Override a single tier with "
+                  "--drafter-provider / --refiner-provider. Each tier needs a "
+                  "key: connected at engine.remyx.ai/integrations, or in this "
+                  "shell as ANTHROPIC_API_KEY / ZAI_API_KEY / "
+                  "MOONSHOT_API_KEY (init pushes it to the repo)."
+              ))
+@click.option("--model", "model", default=None,
+              help=(
+                  "Model id for BOTH tiers (e.g. claude-opus-4-8, glm-5.2, "
+                  "kimi-k3). Defaults to each provider's default model per "
+                  "tier. Override a single tier with --drafter-model / "
+                  "--refiner-model."
+              ))
+@click.option("--drafter-provider", "drafter_provider",
+              type=click.Choice(PROVIDER_CHOICES),
+              default=None,
+              help=("Provider for the daily drafter tier only: anthropic | "
+                    "zai | moonshot (two-tier)."))
+@click.option("--drafter-model", "drafter_model", default=None,
+              help="Model id for the daily drafter tier only (two-tier).")
+@click.option("--refiner-provider", "refiner_provider",
+              type=click.Choice(PROVIDER_CHOICES),
+              default=None,
+              help=("Provider for the weekly refiner tier only: anthropic | "
+                    "zai | moonshot (two-tier)."))
+@click.option("--refiner-model", "refiner_model", default=None,
+              help="Model id for the weekly refiner tier only (two-tier).")
+@click.option("--force", "force", is_flag=True, default=False,
+              help=(
+                  "Re-provision a repo that's already set up, so the engine "
+                  "rewrites its workflow files with this tier config. Without "
+                  "it, provisioning reports \"already enabled\" and leaves "
+                  "them alone. Requires an engine with force support "
+                  "(remyxai/remyx#558); older ones ignore it."
+              ))
+@click.option("--skip-key-check", "skip_key_check", is_flag=True, default=False,
+              help=(
+                  "Provision even when a tier's provider has no API key here "
+                  "or connected. The install will fail auth on its first run "
+                  "until you set the secret (see `outrider "
+                  "set-provider-secret`)."
+              ))
 @click.option("--no-wait", is_flag=True, default=False,
               help=(
                   "Don't block polling for the App install or provisioning to "
@@ -610,9 +664,16 @@ def outrider():
 @click.option("--dry-run", is_flag=True, default=False,
               help="Print the plan and exit without making any changes.")
 @click.option("--yes", "-y", "skip_confirm", is_flag=True, default=False,
-              help="Skip the confirmation prompt (default is opt-in).")
+              help=(
+                  "Run non-interactively: skip the 'Proceed?' confirmation and "
+                  "provision right away. Without it, init prints the plan and "
+                  "waits for you to confirm. Use it for scripts / bulk installs."
+              ))
 def outrider_init(
     repo, interest_id, auto_interest, mode, anthropic_key,
+    single_tier, provider, model,
+    drafter_provider, drafter_model, refiner_provider, refiner_model,
+    force, skip_key_check,
     no_wait, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
@@ -621,20 +682,57 @@ def outrider_init(
     Drives the Remyx engine to do the same "set it up for me" flow as the
     web app: the Remyx GitHub App (remyx-ai[bot]) sets the repo secrets,
     writes the workflow, opens a bot-authored setup PR, and — in auto mode
-    — merges it and fires the first run. Your local git is never touched
-    and no personal `gh` token is needed; only your REMYXAI_API_KEY.
+    — merges it and fires the first run. Your local git is never touched,
+    and the ordinary single-provider install needs nothing but your
+    REMYXAI_API_KEY. (Only a tier pointed at a provider you haven't
+    connected pulls in your `gh` — that key has to come from this shell.)
+
+    By default this installs the **two-tier** setup: a daily *drafter* that
+    explores as fork branches, plus a weekly *refiner* that promotes the
+    strongest draft to a ready-for-review PR (crons off — drive them with
+    `remyxai outrider trigger` or your own dispatcher). Any provider works —
+    anthropic (Claude Code), zai (Z.ai), or moonshot (Moonshot AI), all on
+    equal footing. One `--provider` / `--model` applies to both tiers;
+    `--drafter-*` / `--refiner-*` tune a single tier; unset, a tier follows
+    your connected provider. Pass `--single-tier` for the plain single-file
+    workflow instead.
+
+    Every tier needs an API key in the repo or its first run dies on auth in
+    under a second. The engine pushes the provider you connected on
+    engine.remyx.ai/integrations; for any *other* provider a tier names, init
+    pushes the key from this shell (ANTHROPIC_API_KEY / ZAI_API_KEY /
+    MOONSHOT_API_KEY, via `gh`). A tier with no key either way stops the
+    command before anything is provisioned — override with --skip-key-check.
 
     Requires: the Remyx GitHub App installed on the repo (the command
     surfaces the install link if it isn't) and a connected model provider —
-    connect Claude Code once on engine.remyx.ai/integrations and the CLI
-    uses it automatically. (--anthropic-key / ANTHROPIC_API_KEY is only a
-    one-time fallback if you haven't connected one there yet.)
+    connect one once on engine.remyx.ai/integrations and the CLI uses it
+    automatically. (--anthropic-key / ANTHROPIC_API_KEY is only a one-time
+    inline shortcut if you haven't connected a provider there yet.)
+
+    Provisioning is idempotent: on an already-installed repo it reports
+    "already enabled" and leaves the workflows alone. Pass --force to change
+    the tier config of a live install.
 
     Examples:
 
+      # Two-tier (default), using your connected provider:
       remyxai outrider init --repo remyxai/RepoRanger --auto-interest
 
-      remyxai outrider init --repo owner/name --interest <uuid> --mode review
+      # Two-tier with one provider for both tiers (any of the three):
+      remyxai outrider init --repo owner/name --auto-interest --provider moonshot
+
+      # Two-tier mixing providers per tier (cheap drafter + capable refiner):
+      remyxai outrider init --repo owner/name --auto-interest \\
+        --drafter-provider zai --drafter-model glm-5.2 \\
+        --refiner-provider anthropic
+
+      # Plain single-file workflow:
+      remyxai outrider init --repo owner/name --interest <uuid> --single-tier
+
+      # Change the tier config of a repo that's already set up:
+      remyxai outrider init --repo owner/name --interest <uuid> \\
+        --refiner-provider moonshot --refiner-model kimi-k3 --force
 
       remyxai outrider init --bulk-repos repos.tsv --mode review --yes
     """
@@ -652,6 +750,15 @@ def outrider_init(
                 auto_interest=False,
                 mode=mode,
                 anthropic_key=anthropic_key,
+                single_tier=single_tier,
+                provider=provider,
+                model=model,
+                drafter_provider=drafter_provider,
+                drafter_model=drafter_model,
+                refiner_provider=refiner_provider,
+                refiner_model=refiner_model,
+                force=force,
+                skip_key_check=skip_key_check,
                 skip_confirm=skip_confirm,
                 dry_run=dry_run,
                 no_wait=no_wait,
@@ -665,6 +772,15 @@ def outrider_init(
         auto_interest=auto_interest,
         mode=mode,
         anthropic_key=anthropic_key,
+        single_tier=single_tier,
+        provider=provider,
+        model=model,
+        drafter_provider=drafter_provider,
+        drafter_model=drafter_model,
+        refiner_provider=refiner_provider,
+        refiner_model=refiner_model,
+        force=force,
+        skip_key_check=skip_key_check,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
         no_wait=no_wait,
@@ -916,7 +1032,63 @@ def outrider_setup_local(
                   "Requires the target workflow to declare a `publish` "
                   "input (all CLI-generated templates do)."
               ))
-def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_timeout, provider, model, base_url, publish):
+@click.option("--mode", "mode", default=None,
+              help=(
+                  "Run mode. 'recommend' (the workflow default) runs the full "
+                  "scout→implement flow; 'brief' produces the write-up without "
+                  "implementing. Whatever the installed action version "
+                  "supports."
+              ))
+@click.option("--start-from-ref", "start_from_ref", default=None,
+              help=(
+                  "Branch the agent BUILDS ON instead of implementing from "
+                  "scratch (a drafter branch, or a third party's stalled PR "
+                  "branch). Not the same as --ref, which only picks which "
+                  "branch the workflow file itself comes from."
+              ))
+@click.option("--lead-content", "lead_content", default=None,
+              help=(
+                  "Inline markdown fed to the agent as leading context "
+                  "(e.g. a gap analysis). Mutually exclusive with "
+                  "--lead-content-file."
+              ))
+@click.option("--lead-content-file", "lead_content_file",
+              type=click.Path(exists=True, dir_okay=False, readable=True),
+              default=None,
+              help=(
+                  "Read the leading context from a file — the usual way to "
+                  "pass a written gap analysis. Capped at ~60k chars by "
+                  "GitHub's dispatch payload limit."
+              ))
+@click.option("--staged-synthesis", "staged_synthesis", is_flag=True,
+              default=False,
+              help=(
+                  "Enable the multi-pass staged-synthesis flow (what the "
+                  "two-tier refiner turns on for its promotion pass)."
+              ))
+@click.option("--test-integration-policy", "test_integration_policy",
+              default=None,
+              help="Override the run's test-integration policy input.")
+@click.option("--fidelity-policy", "fidelity_policy", default=None,
+              help=(
+                  "Pre-PR fidelity gate: block | advisory | off. 'advisory' "
+                  "suits a human-vetted warm-start branch that a strict "
+                  "full-reference-port audit would wrongly block."
+              ))
+@click.option("--wait-for-slot", "wait_for_slot", is_flag=True, default=False,
+              help=(
+                  "If an Outrider run is already pending on the repo, wait for "
+                  "it to start instead of dispatching (which would silently "
+                  "cancel it — the workflow's concurrency group holds exactly "
+                  "one pending run). Use when firing several dispatches at one "
+                  "repo."
+              ))
+def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
+                     claude_timeout, provider, model, base_url, mode,
+                     publish, start_from_ref, lead_content,
+                     lead_content_file, staged_synthesis,
+                     test_integration_policy, fidelity_policy,
+                     wait_for_slot):
     """
     Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -930,6 +1102,14 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_ti
       on the user-specified query; the top hit gets implemented.
     - --pin-arxiv: exact arxiv paper; bypasses the pool entirely and
       implements THIS specific paper against the target branch.
+
+    On top of paper selection, the refinement inputs drive a run that builds
+    on existing work: --start-from-ref pins the branch to build ON,
+    --lead-content-file pipes in a gap analysis, --staged-synthesis turns on
+    the multi-pass flow, and --mode / --publish / --fidelity-policy /
+    --test-integration-policy select the rest. Inputs the installed workflow
+    doesn't declare are dropped with a warning rather than failing the
+    dispatch.
 
     The repo must already have an Outrider workflow installed (see
     `remyxai outrider init` / `setup-local`). Authenticates via your
@@ -953,6 +1133,17 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_ti
       remyxai outrider trigger --repo owner/name \\
         --pin-arxiv 2402.02347v3 --claude-timeout 1800
 
+      # Refine an existing branch: build on it, with a gap analysis as
+      # leading context (the second-pass / promotion shape)
+      remyxai outrider trigger --repo owner/name \\
+        --start-from-ref outrider/deim-draft \\
+        --lead-content-file gap-analysis.md --staged-synthesis \\
+        --fidelity-policy advisory
+
+      # Serialize a batch of dispatches at one repo
+      remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \\
+        --wait-for-slot
+
       # Plain trigger — let the normal selection pass run
       remyxai outrider trigger --repo owner/name
     """
@@ -966,7 +1157,15 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_ti
         provider=provider,
         model=model,
         base_url=base_url,
+        mode=mode,
         publish=publish,
+        start_from_ref=start_from_ref,
+        lead_content=lead_content,
+        lead_content_file=lead_content_file,
+        staged_synthesis=staged_synthesis,
+        test_integration_policy=test_integration_policy,
+        fidelity_policy=fidelity_policy,
+        wait_for_slot=wait_for_slot,
     )
 
 
@@ -974,9 +1173,11 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref, claude_ti
 @click.option("--repo", "repo", default=None,
               help="Target repo (owner/name). Defaults to the cwd's git remote.")
 @click.option("--provider", "provider", required=True,
+              type=click.Choice(PROVIDER_CHOICES),
               help=(
-                  "Which provider's API key this is for. Selects the "
-                  "secret name (anthropic→ANTHROPIC_API_KEY, zai→ZAI_API_KEY)."
+                  "Which provider's API key this is for. Selects the secret "
+                  "name (anthropic→ANTHROPIC_API_KEY, zai→ZAI_API_KEY, "
+                  "moonshot→MOONSHOT_API_KEY)."
               ))
 @click.option("--key-from", "key_from", required=True,
               type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -1008,6 +1209,11 @@ def outrider_set_provider_secret(repo, provider, key_from):
       remyxai outrider set-provider-secret \\
         --repo your-fork/repo --provider zai \\
         --key-from ~/zai-key
+
+      # Moonshot key (e.g. a two-tier refiner pointed at kimi-k3)
+      remyxai outrider set-provider-secret \\
+        --repo your-fork/repo --provider moonshot \\
+        --key-from ~/moonshot-key
 
     The matching workflow_dispatch input on the repo's outrider.yml
     routes a dispatch with `--provider zai --model glm-5.2` at the

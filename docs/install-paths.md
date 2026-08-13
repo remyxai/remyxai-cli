@@ -21,6 +21,39 @@ The App is the load-bearing piece. At runtime, the workflow asks the engine to m
 
 If the App isn't installed yet, the command surfaces the install link — accept it once and the engine handles the rest.
 
+### Provider keys per tier
+
+The engine pushes a secret for every provider your tiers name that you've connected, so a mixed-provider install needs nothing local. A tier pointed at a provider you have *not* connected (`--drafter-provider zai` with no z.ai credential) still needs a key from somewhere — without one the repo provisions cleanly and then fails auth on its first run in a few hundred milliseconds:
+
+```
+ERROR ✗ auth check: ANTHROPIC_AUTH_TOKEN is not set — agent calls will fail with HTTP 401.
+```
+
+`init` closes that gap: it works out which providers the engine covers, pushes any unconnected tier's key from your shell (`ANTHROPIC_API_KEY` / `ZAI_API_KEY` / `MOONSHOT_API_KEY`, via `gh`), and refuses to provision at all when a tier has no key either way. The plan block spells the routing out before you confirm:
+
+```
+Plan:
+  - Repo:      owner/name
+  - Setup:     two-tier (default) — drafter zai:glm-5.2 + refiner anthropic, cron off
+  - Keys:      anthropic — pushed by the engine from your connected credential (workflow default)
+               zai — ZAI_API_KEY from this shell → repo secret (not connected server-side)
+```
+
+`--dry-run` reports the same routing (and the same refusal) without changing anything. `--skip-key-check` provisions anyway if you intend to set the secret later with `outrider set-provider-secret`.
+
+An install whose tiers all use providers you've connected — the ordinary case, mixed or not — needs no local key and no `gh` at all.
+
+### Changing a live install: `--force`
+
+Provisioning is idempotent, and a repo that's already fully installed short-circuits with `… Already enabled` — including the step that writes the workflow files. So a wrong `--refiner-provider` on first install can't be corrected by re-running `init`:
+
+```bash
+remyxai outrider init --repo owner/name --interest <uuid> \
+  --refiner-provider moonshot --refiner-model kimi-k3 --force
+```
+
+`--force` tells the engine to skip that short-circuit and re-drive every step, rewriting the workflow YAML in place (new setup PR, auto-merged in `auto` mode). It needs an engine with force support (remyxai/remyx#558); older deployments ignore the flag and still report "already enabled".
+
 
 ## `outrider setup-local` — when the App can't be granted
 

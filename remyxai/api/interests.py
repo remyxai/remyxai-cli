@@ -291,6 +291,9 @@ def provision_action(
     auto_merge: bool = True,
     branch: Optional[str] = None,
     workflow_filename: Optional[str] = None,
+    phases: Optional[Dict[str, Any]] = None,
+    model_provider: Optional[str] = None,
+    force: bool = False,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -305,16 +308,40 @@ def provision_action(
         repo_url:   GitHub URL; defaults to the interest's source repo.
         auto_merge: merge the setup PR + dispatch the first run ("set it
                     up for me"). False opens the PR for the user to review.
+        phases:     Per-tier model config. ``{"mode": "two_tier"|"single",
+                    "drafter"/"refiner"/"main": {"provider", "model"}}``.
+                    In two_tier mode the engine writes the drafter + refiner
+                    companion workflows (cron-off) alongside the dispatch
+                    target. Omit for the plain single-file setup. An empty
+                    ``model`` uses that tier's default (drafter → a cheap
+                    model, refiner/main → the provider default).
+        model_provider:
+                    Integration id of the provider whose connected key the
+                    engine should push to the repo secret (``claude_code`` |
+                    ``zai`` | ``moonshot``). The engine pushes exactly one, so
+                    name the tier provider that has no other way in; it falls
+                    back to the first connected provider when this one isn't
+                    connected. Omit to keep that default.
+        force:      re-drive every step on a repo that's already fully
+                    installed. Without it the engine returns "Already enabled"
+                    and leaves the workflow files — and their tier config — as
+                    they are.
 
     Returns 202 { task_id, status_url }. Poll with poll_provision_action.
     """
     payload: Dict[str, Any] = {"auto_merge": auto_merge}
+    if force:
+        payload["force"] = True
+    if model_provider:
+        payload["model_provider"] = model_provider
     if repo_url:
         payload["repo_url"] = repo_url
     if branch:
         payload["branch"] = branch
     if workflow_filename:
         payload["workflow_filename"] = workflow_filename
+    if phases:
+        payload["phases"] = phases
 
     r = requests.post(
         f"{BASE_URL}/interests/{interest_id}/provision-action",

@@ -14,10 +14,16 @@ Run any command with `--help` for full flag listings and examples — that's the
 |---|---|
 | `remyxai outrider init` | Install Outrider on a repo via the Remyx App |
 | `remyxai outrider setup-local` | Install Outrider via your own `gh` (no Remyx App) |
-| `remyxai outrider trigger` | Dispatch a one-shot run (`--search-method` / `--pin-arxiv` / `--provider` / `--model` / `--claude-timeout`) |
-| `remyxai outrider set-provider-secret` | Set a per-provider API-key secret on a repo, safely |
+| `remyxai outrider trigger` | Dispatch a one-shot run — selection (`--search-method` / `--pin-arxiv`), routing (`--provider` / `--model` / `--claude-timeout`), refinement (`--start-from-ref` / `--lead-content-file` / `--staged-synthesis` / `--mode` / `--publish` / `--fidelity-policy` / `--test-integration-policy`) |
+| `remyxai outrider set-provider-secret` | Set a per-provider API-key secret on a repo, safely (`anthropic` / `zai` / `moonshot`) |
 
 See also: [method-targeted-runs.md](method-targeted-runs.md) for `outrider trigger` in depth, [install-paths.md](install-paths.md) for `init` vs `setup-local` and bulk-install.
+
+### Provider keys and re-provisioning
+
+`init` routes each tier's provider key to the repo: every provider you've connected on engine.remyx.ai is pushed server-side, and a tier pointed at a provider you haven't connected is pushed from your shell (`ANTHROPIC_API_KEY` / `ZAI_API_KEY` / `MOONSHOT_API_KEY`). A tier with no key either way stops the command before provisioning — `--skip-key-check` overrides.
+
+Provisioning is idempotent: an already-installed repo reports "already enabled" and its workflow files are left alone. Use `--force` to change a live install's tier config — the engine re-drives every step and rewrites the workflow files.
 
 ## Papers
 

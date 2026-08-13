@@ -131,3 +131,46 @@ def test_get_provision_status_not_provisioned():
                return_value=_resp({"provisioned": False})):
         out = interests_api.get_provision_status("iid", api_key="k")
     assert out["provisioned"] is False
+
+
+# ─── engine base URL override ───────────────────────────────────────────────
+#
+# Verifying a change against a test server needs the CLI pointed at it;
+# REMYXAI_API_URL is that knob. Production stays the default when it's unset.
+
+class TestResolveBaseUrl:
+    def test_defaults_to_production(self, monkeypatch):
+        from remyxai.api import DEFAULT_BASE_URL, resolve_base_url
+
+        monkeypatch.delenv("REMYXAI_API_URL", raising=False)
+        assert resolve_base_url() == DEFAULT_BASE_URL
+
+    def test_appends_the_version_path_to_a_bare_origin(self):
+        from remyxai.api import resolve_base_url
+
+        assert resolve_base_url("http://localhost:5000") == \
+            "http://localhost:5000/api/v1.0"
+
+    def test_keeps_a_full_api_base_as_given(self):
+        from remyxai.api import resolve_base_url
+
+        assert resolve_base_url("http://localhost:5000/api/v1.0") == \
+            "http://localhost:5000/api/v1.0"
+
+    def test_strips_a_trailing_slash(self):
+        from remyxai.api import resolve_base_url
+
+        assert resolve_base_url("http://staging.example/") == \
+            "http://staging.example/api/v1.0"
+
+    def test_reads_the_env_var(self, monkeypatch):
+        from remyxai.api import resolve_base_url
+
+        monkeypatch.setenv("REMYXAI_API_URL", "http://127.0.0.1:5000")
+        assert resolve_base_url() == "http://127.0.0.1:5000/api/v1.0"
+
+    def test_blank_env_falls_back_to_production(self, monkeypatch):
+        from remyxai.api import DEFAULT_BASE_URL, resolve_base_url
+
+        monkeypatch.setenv("REMYXAI_API_URL", "   ")
+        assert resolve_base_url() == DEFAULT_BASE_URL
