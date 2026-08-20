@@ -129,6 +129,8 @@ def test_ensure_app_installed_when_already_installed():
 
 def test_ensure_app_installed_no_wait_raises_with_link():
     with patch.object(outrider_actions, "is_app_installed", return_value=False), \
+         patch.object(outrider_actions, "get_app_installation",
+                      return_value={"installed": False, "account_installed": False}), \
          patch.object(outrider_actions, "get_app_install_url",
                       return_value={"configured": True, "install_url": "https://x/install"}):
         with pytest.raises(click.ClickException):
@@ -140,12 +142,90 @@ def test_ensure_app_installed_polls_until_installed():
     seq = iter([False, True])
     with patch.object(outrider_actions, "is_app_installed",
                       side_effect=lambda *a, **k: next(seq)), \
+         patch.object(outrider_actions, "get_app_installation",
+                      return_value={"installed": False, "account_installed": False}), \
          patch.object(outrider_actions, "get_app_install_url",
                       return_value={"configured": True, "install_url": "https://x/install"}):
         # sleep is injected → no real delay
         outrider_actions._ensure_app_installed(
             "o/r", "k", no_wait=False, sleep=lambda s: None
         )
+
+
+def test_repo_not_selected_points_at_the_installations_settings_page(capsys):
+    """"I already installed it everywhere" is the common report: the App is on
+    the account, this repo just isn't in its selected set. GitHub's install
+    link is a no-op then, so the user must land on repo-access settings."""
+    with patch.object(outrider_actions, "is_app_installed", return_value=False), \
+         patch.object(outrider_actions, "get_app_installation", return_value={
+             "installed": False,
+             "account_installed": True,
+             "account": "acme",
+             "reason": "repo_not_selected",
+             "manage_url": "https://github.com/settings/installations/42",
+         }), \
+         patch.object(outrider_actions, "get_app_install_url") as url:
+        with pytest.raises(click.ClickException) as e:
+            outrider_actions._ensure_app_installed(
+                "acme/widget", "k", no_wait=True
+            )
+    url.assert_not_called()  # the generic install link would be a dead end
+    out = capsys.readouterr().out
+    assert "https://github.com/settings/installations/42" in out
+    assert "isn't in the repos it can access" in out
+    assert "https://github.com/settings/installations/42" in str(e.value)
+
+
+def test_all_repos_install_does_not_ask_for_a_click(capsys):
+    """The all-repos case (a just-forked repo GitHub hasn't propagated yet)
+    has nothing to grant — telling the user to grant access they already
+    granted is what made the original timeout unreadable."""
+    with patch.object(outrider_actions, "is_app_installed", return_value=False), \
+         patch.object(outrider_actions, "get_app_installation", return_value={
+             "installed": False,
+             "account_installed": True,
+             "account": "acme",
+             "repository_selection": "all",
+             "reason": "repo_unavailable",
+             "manage_url": "https://github.com/settings/installations/42",
+         }), \
+         patch.object(outrider_actions, "get_app_install_url") as url:
+        with pytest.raises(click.ClickException):
+            outrider_actions._ensure_app_installed(
+                "acme/widget", "k", no_wait=True
+            )
+    url.assert_not_called()
+    out = capsys.readouterr().out
+    assert "access to all repositories" in out
+    assert "grant it access" not in out
+
+
+def test_suspended_install_says_unsuspend(capsys):
+    with patch.object(outrider_actions, "is_app_installed", return_value=False), \
+         patch.object(outrider_actions, "get_app_installation", return_value={
+             "installed": False,
+             "account_installed": True,
+             "account": "acme",
+             "reason": "suspended",
+             "manage_url": "https://github.com/organizations/acme/settings/installations/7",
+         }), \
+         patch.object(outrider_actions, "get_app_install_url") as url:
+        with pytest.raises(click.ClickException):
+            outrider_actions._ensure_app_installed("acme/thing", "k", no_wait=True)
+    url.assert_not_called()
+    assert "suspended" in capsys.readouterr().out
+
+
+def test_status_lookup_failure_falls_back_to_install_link(capsys):
+    """The diagnosis is a nicety — if it errors, the install link still shows."""
+    with patch.object(outrider_actions, "is_app_installed", return_value=False), \
+         patch.object(outrider_actions, "get_app_installation",
+                      side_effect=RuntimeError("boom")), \
+         patch.object(outrider_actions, "get_app_install_url",
+                      return_value={"configured": True, "install_url": "https://x/install"}):
+        with pytest.raises(click.ClickException):
+            outrider_actions._ensure_app_installed("o/r", "k", no_wait=True)
+    assert "https://x/install" in capsys.readouterr().out
 
 
 # ─── model-provider preflight ───────────────────────────────────────────────

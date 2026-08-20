@@ -19,7 +19,15 @@ remyxai outrider init --repo owner/name --auto-interest
 
 The App is the load-bearing piece. At runtime, the workflow asks the engine to mint a short-lived `remyx-ai[bot]` token so the action's PRs and Issues are authored by the bot — not `github-actions[bot]`. **Without the App installed on the target, that token-mint silently returns empty and the action falls back to the workflow's built-in `GITHUB_TOKEN`** — the run still succeeds but the artifacts are anonymous and skip the convention-pass enrichments that key off the bot author. Always prefer this path when the org can grant the App.
 
-If the App isn't installed yet, the command surfaces the install link — accept it once and the engine handles the rest.
+If the App isn't installed yet, the command surfaces the install link — accept it once and the engine handles the rest, then waits for GitHub to report access.
+
+Three states get different guidance, because they need different actions:
+
+| What the engine reports | What `init` tells you |
+| --- | --- |
+| App installed nowhere on the account | the install link — accept it once |
+| Installed on *selected* repos, not this one | the installation's **Repository access** page. The install link is a no-op once the App is installed, so this is the only link that can fix it |
+| Installed on **all** repositories, repo still not covered | nothing to click — usually GitHub still propagating a just-created repo (a fresh fork), so `init` keeps waiting; otherwise check that the repo name is right and visible to the App |
 
 ### Provider keys per tier
 

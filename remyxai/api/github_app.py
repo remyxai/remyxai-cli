@@ -43,10 +43,17 @@ def get_app_install_url(api_key: Optional[str] = None) -> Dict[str, Any]:
     return r.json()
 
 
-def is_app_installed(repo: str, api_key: Optional[str] = None) -> bool:
-    """Whether the Remyx App is installed on `repo` (owner/name).
+def get_app_installation(repo: str, api_key: Optional[str] = None) -> Dict[str, Any]:
+    """Installation status for `repo` (owner/name), as the engine reports it.
 
     Calls GET /api/v1.0/github/app/installation?repo=owner/name
+
+    Returns { installed, repo, ... }. When the App isn't on the repo but *is*
+    installed on the owner account, the engine adds ``account_installed``,
+    ``reason`` ("repo_not_selected" | "suspended") and ``manage_url`` — the
+    settings page where a repo gets added to an existing installation. That
+    case is invisible from the install link alone, which GitHub treats as a
+    no-op once the App is installed.
     """
     r = requests.get(
         f"{BASE_URL}/github/app/installation",
@@ -56,4 +63,9 @@ def is_app_installed(repo: str, api_key: Optional[str] = None) -> bool:
     )
     log_api_response(r)
     r.raise_for_status()
-    return bool(r.json().get("installed"))
+    return r.json() or {}
+
+
+def is_app_installed(repo: str, api_key: Optional[str] = None) -> bool:
+    """Whether the Remyx App is installed on `repo` (owner/name)."""
+    return bool(get_app_installation(repo, api_key=api_key).get("installed"))
