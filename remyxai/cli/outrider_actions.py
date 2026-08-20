@@ -45,7 +45,11 @@ from remyxai.cli.interest_actions import (
     _kick_off_recommendations,
 )
 from remyxai.api.integrations import connect_credential, get_integration_status
-from remyxai.api.github_app import get_app_install_url, is_app_installed
+from remyxai.api.github_app import (
+    get_app_install_url,
+    get_app_installation,
+    is_app_installed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -226,12 +230,53 @@ def _resolve_interest_id(interest_id, auto_interest, repo, repo_url, api_key):
 
 # ─── preflight helpers ─────────────────────────────────────────────────────
 
-def _ensure_app_installed(repo, api_key, no_wait, sleep=time.sleep):
-    """Confirm the Remyx App is installed on `repo`; otherwise surface the
-    install link and poll until it is (installing is a browser step)."""
-    if is_app_installed(repo, api_key=api_key):
-        click.echo(f"✓ Remyx GitHub App is installed on {repo}")
-        return
+def _install_action_link(repo, api_key):
+    """(url, instruction, needs_click) for getting the App onto `repo`.
+
+    Three states look identical from here, and telling them apart is the whole
+    point:
+      - App installed nowhere            → the install link
+      - installed, repo not in its set   → the installation's repo-access page
+                                           (the install link is a no-op then,
+                                           which is what produces "I already
+                                           installed it" + a timeout)
+      - installed on all repos           → nothing to click; GitHub is still
+                                           propagating a just-created repo, or
+                                           the repo isn't visible to the App
+
+    ``needs_click`` is False for that last state — telling someone to grant
+    access they've already granted is how the timeout got misread as an
+    install problem in the first place.
+    """
+    try:
+        status = get_app_installation(repo, api_key=api_key)
+    except Exception:  # status is a nicety; never block the install on it
+        status = {}
+
+    if status.get("account_installed") and status.get("manage_url"):
+        account = status.get("account") or repo.split("/", 1)[0]
+        reason = status.get("reason")
+        if reason == "suspended":
+            return status["manage_url"], (
+                f"The Remyx GitHub App is installed on {account} but is "
+                f"suspended. Unsuspend it, then come back here:"
+            ), True
+        if reason == "repo_unavailable":
+            # All-repos install: nothing for the user to click. Usually a
+            # just-created fork GitHub hasn't propagated into the
+            # installation yet, which resolves on its own within a minute.
+            return status["manage_url"], (
+                f"The Remyx GitHub App is installed on {account} with access "
+                f"to all repositories, so {repo} should be covered — GitHub "
+                f"may still be catching up on a just-created repo. If this "
+                f"doesn't clear, check that {repo} exists and is visible to "
+                f"the App:"
+            ), False
+        return status["manage_url"], (
+            f"The Remyx GitHub App is installed on {account}, but {repo} "
+            f"isn't in the repos it can access. Add it here "
+            f"(Repository access → select {repo} → Save):"
+        ), True
 
     info = get_app_install_url(api_key=api_key)
     if not info.get("configured", True) or not info.get("install_url"):
@@ -239,18 +284,33 @@ def _ensure_app_installed(repo, api_key, no_wait, sleep=time.sleep):
             "The Remyx GitHub App isn't configured on the server. "
             "Contact Remyx support."
         )
+    return info["install_url"], (
+        "Action needed — install the Remyx GitHub App on this repo:"
+    ), True
+
+
+def _ensure_app_installed(repo, api_key, no_wait, sleep=time.sleep):
+    """Confirm the Remyx App is installed on `repo`; otherwise surface the
+    right link and poll until it is (installing is a browser step)."""
+    if is_app_installed(repo, api_key=api_key):
+        click.echo(f"✓ Remyx GitHub App is installed on {repo}")
+        return
+
+    url, instruction, needs_click = _install_action_link(repo, api_key)
     click.echo("")
-    click.secho(
-        "Action needed — install the Remyx GitHub App on this repo:",
-        fg="yellow", bold=True,
-    )
-    click.echo(f"  {info['install_url']}")
-    click.echo("  (grant it access to the repo, then come back here)")
+    click.secho(instruction, fg="yellow", bold=True)
+    click.echo(f"  {url}")
+    if needs_click:
+        click.echo("  (grant it access to the repo, then come back here)")
     if no_wait:
         raise click.ClickException(
-            "App not installed yet. Install it via the link above, then re-run."
+            f"App access to {repo} isn't live yet. {instruction}\n  {url}\n"
+            f"  Then re-run."
         )
-    click.echo("\nWaiting for the install to complete…")
+    click.echo(
+        "\nWaiting for the install to complete…" if needs_click
+        else "\nWaiting for GitHub to report access…"
+    )
     waited = 0
     while waited < INSTALL_POLL_TIMEOUT:
         sleep(INSTALL_POLL_INTERVAL)
@@ -259,8 +319,10 @@ def _ensure_app_installed(repo, api_key, no_wait, sleep=time.sleep):
             click.echo(f"✓ Remyx GitHub App is now installed on {repo}")
             return
     raise click.ClickException(
-        f"Timed out after {INSTALL_POLL_TIMEOUT}s waiting for the App install. "
-        f"Install it via the link above and re-run."
+        f"Timed out after {INSTALL_POLL_TIMEOUT}s waiting for App access to "
+        f"{repo}.\n  {instruction}\n  {url}\n"
+        f"  Re-run once that reads as granted — the check is live, so a "
+        f"re-run picks it up immediately."
     )
 
 

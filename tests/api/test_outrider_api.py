@@ -69,6 +69,21 @@ def test_is_app_installed_false():
         assert github_app.is_app_installed("o/r", api_key="k") is False
 
 
+def test_get_app_installation_returns_the_diagnosis_fields():
+    """The not-installed body carries why, and where to fix it."""
+    body = {
+        "installed": False,
+        "repo": "o/r",
+        "account_installed": True,
+        "reason": "repo_not_selected",
+        "manage_url": "https://github.com/settings/installations/42",
+    }
+    with patch("remyxai.api.github_app.requests.get", return_value=_resp(body)) as g:
+        out = github_app.get_app_installation("o/r", api_key="k")
+    assert out == body
+    assert g.call_args.kwargs["params"] == {"repo": "o/r"}
+
+
 # ─── integrations ─────────────────────────────────────────────────────────────
 
 def test_get_integration_status_unwraps_connected():
