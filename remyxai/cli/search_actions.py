@@ -4,6 +4,7 @@ CLI actions for searching and managing research assets
 """
 import logging
 import json
+import sys
 from typing import Optional, List
 from remyxai.api.search import (
     search_assets,
@@ -19,25 +20,29 @@ def handle_search(
     query: str, 
     max_results: int = 10, 
     categories: Optional[List[str]] = None,
-    has_docker: Optional[bool] = None
+    has_docker: Optional[bool] = None,
+    output_format: str = "text"
 ):
     """Handle asset search action."""
-    print(f"\n🔍 Searching for: '{query}'")
-    
-    # Show filter status
-    filter_info = []
-    if has_docker is True:
-        filter_info.append("with Docker only")
-    elif has_docker is False:
-        filter_info.append("without Docker only")
-    else:
-        filter_info.append("all assets")
-    
-    if categories:
-        filter_info.append(f"categories: {', '.join(categories)}")
-    
-    print(f"   Filters: {', '.join(filter_info)}")
-    print("=" * 80)
+    as_json = output_format == "json"
+
+    if not as_json:
+        print(f"\n🔍 Searching for: '{query}'")
+
+        # Show filter status
+        filter_info = []
+        if has_docker is True:
+            filter_info.append("with Docker only")
+        elif has_docker is False:
+            filter_info.append("without Docker only")
+        else:
+            filter_info.append("all assets")
+
+        if categories:
+            filter_info.append(f"categories: {', '.join(categories)}")
+
+        print(f"   Filters: {', '.join(filter_info)}")
+        print("=" * 80)
     
     try:
         results = search_assets(
@@ -50,7 +55,19 @@ def handle_search(
         
         assets = results['assets']
         strategy = results.get('strategy', 'traditional')
-        
+
+        if as_json:
+            # Envelope mirrors the API response so scripts get the result
+            # metadata, not just the hits. An empty result set is still valid
+            # JSON — no tips, no chrome on stdout.
+            print(json.dumps({
+                "query": results.get("query", query),
+                "strategy": strategy,
+                "total": results.get("total", len(assets)),
+                "assets": [a.to_dict() for a in assets],
+            }, indent=2))
+            return
+
         if not assets:
             print("\nNo assets found.")
             if has_docker is True:
@@ -89,16 +106,31 @@ def handle_search(
                 print("   Use --docker flag to see only assets with Docker")
             
     except Exception as e:
+        # In JSON mode a failure must not land on stdout — a consumer piping to
+        # jq would otherwise parse an error banner as data — and it must exit
+        # non-zero so the caller notices.
+        if as_json:
+            print(f"Search failed: {e}", file=sys.stderr)
+            logger.error(f"Search error: {e}", exc_info=True)
+            sys.exit(1)
         print(f"❌ Search failed: {e}")
         logger.error(f"Search error: {e}", exc_info=True)
 
 
 def handle_info(arxiv_id: str, output_format: str = "text"):
     """Handle asset info action."""
+    as_json = output_format == "json"
     try:
         asset = get_asset(arxiv_id)
         
         if not asset:
+            # A missing asset is a failure a script has to notice, so in JSON
+            # mode it exits non-zero with a clean stdout rather than printing a
+            # tip a consumer would try to parse.
+            if as_json:
+                print(f"Asset {arxiv_id} not found in Remyx catalog or arXiv.",
+                      file=sys.stderr)
+                sys.exit(1)
             print(f"❌ Asset {arxiv_id} not found in Remyx catalog or arXiv.")
             print("\n💡 Tip: Use 'remyxai search query' to find assets")
             return
@@ -165,6 +197,10 @@ def handle_info(arxiv_id: str, output_format: str = "text"):
             print()
             
     except Exception as e:
+        if as_json:
+            print(f"Failed to get asset {arxiv_id}: {e}", file=sys.stderr)
+            logger.error(f"Get asset error: {e}", exc_info=True)
+            sys.exit(1)
         print(f"❌ Error: {e}")
         logger.error(f"Get asset error: {e}", exc_info=True)
 
@@ -173,25 +209,29 @@ def handle_list(
     limit: int = 20, 
     offset: int = 0, 
     categories: Optional[List[str]] = None,
-    has_docker: Optional[bool] = None
+    has_docker: Optional[bool] = None,
+    output_format: str = "text"
 ):
     """Handle asset list action."""
-    print("\n📚 Recently Added Research Assets")
-    
-    # Show filter status
-    filter_info = []
-    if has_docker is True:
-        filter_info.append("with Docker only")
-    elif has_docker is False:
-        filter_info.append("without Docker only")
-    
-    if categories:
-        filter_info.append(f"categories: {', '.join(categories)}")
-    
-    if filter_info:
-        print(f"   Filters: {', '.join(filter_info)}")
-    
-    print("=" * 80)
+    as_json = output_format == "json"
+
+    if not as_json:
+        print("\n📚 Recently Added Research Assets")
+
+        # Show filter status
+        filter_info = []
+        if has_docker is True:
+            filter_info.append("with Docker only")
+        elif has_docker is False:
+            filter_info.append("without Docker only")
+
+        if categories:
+            filter_info.append(f"categories: {', '.join(categories)}")
+
+        if filter_info:
+            print(f"   Filters: {', '.join(filter_info)}")
+
+        print("=" * 80)
     
     try:
         results = list_assets(
@@ -203,7 +243,18 @@ def handle_list(
         
         assets = results['assets']
         total = results['total']
-        
+
+        if as_json:
+            # limit/offset/total ride along so a script can page without
+            # re-deriving them from the request.
+            print(json.dumps({
+                "total": total,
+                "limit": results.get("limit", limit),
+                "offset": results.get("offset", offset),
+                "assets": [a.to_dict() for a in assets],
+            }, indent=2))
+            return
+
         if not assets:
             print("\nNo assets found.")
             if has_docker is True:
@@ -238,21 +289,36 @@ def handle_list(
             print("   Use --docker flag to see only containerized assets")
             
     except Exception as e:
+        if as_json:
+            print(f"List failed: {e}", file=sys.stderr)
+            logger.error(f"List assets error: {e}", exc_info=True)
+            sys.exit(1)
         print(f"❌ List failed: {e}")
         logger.error(f"List assets error: {e}", exc_info=True)
 
 
-def handle_stats():
+def handle_stats(output_format: str = "text"):
     """Handle asset stats action."""
-    print("\n📊 Remyx Research Assets Statistics")
-    print("=" * 80)
+    as_json = output_format == "json"
+
+    if not as_json:
+        print("\n📊 Remyx Research Assets Statistics")
+        print("=" * 80)
     
     try:
         stats = get_stats()
+
+        if as_json:
+            # The endpoint's payload is already flat and JSON-able; pass it
+            # through rather than reshaping, so new fields surface for free.
+            print(json.dumps(stats, indent=2))
+            return
         
-        total = stats.get('total_papers', 0)
-        with_docker = stats.get('papers_with_docker', 0)
-        without_docker = stats.get('papers_without_docker', 0)
+        # The endpoint returns assets_*, not papers_* — reading the wrong keys
+        # printed 0 for every count regardless of the catalog size (REMYX-286).
+        total = stats.get('total_assets', 0)
+        with_docker = stats.get('assets_with_docker', 0)
+        without_docker = stats.get('assets_without_docker', 0)
         recent = stats.get('recent_additions', 0)
         
         print(f"\nTotal Assets: {total}")
@@ -273,5 +339,9 @@ def handle_stats():
         print()
         
     except Exception as e:
+        if as_json:
+            print(f"Stats failed: {e}", file=sys.stderr)
+            logger.error(f"Stats error: {e}", exc_info=True)
+            sys.exit(1)
         print(f"❌ Stats failed: {e}")
         logger.error(f"Stats error: {e}", exc_info=True)

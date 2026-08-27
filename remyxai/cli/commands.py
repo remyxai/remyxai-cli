@@ -56,7 +56,9 @@ def search():
 @click.option("--max-results", "-n", default=10, help="Maximum results to return")
 @click.option("--category", "-c", multiple=True, help="Filter by arXiv category")
 @click.option("--docker/--no-docker", default=None, help="Filter by Docker availability")
-def search_query_cmd(query_text, max_results, category, docker):
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), help="Output format")
+def search_query_cmd(query_text, max_results, category, docker, output_format):
     """
     Search for research assets in the Remyx catalog.
     
@@ -70,6 +72,9 @@ def search_query_cmd(query_text, max_results, category, docker):
       
       # Search with filters
       remyxai search query "machine learning" --docker -c cs.LG -n 5
+      
+      # Machine-readable output
+      remyxai search query "data synthesis" --format json | jq -r '.assets[].arxiv_id'
     """
     try:
         categories = list(category) if category else None
@@ -84,7 +89,8 @@ def search_query_cmd(query_text, max_results, category, docker):
             query_text, 
             max_results=max_results, 
             categories=categories,
-            has_docker=has_docker_filter
+            has_docker=has_docker_filter,
+            output_format=output_format
         )
     except Exception as e:
         click.echo(f"❌ Error searching assets: {e}", err=True)
@@ -92,9 +98,9 @@ def search_query_cmd(query_text, max_results, category, docker):
 
 @search.command("info")
 @click.argument("arxiv_id")
-@click.option("--format", "-f", default="text", type=click.Choice(["text", "json"]), 
-              help="Output format")
-def info_cmd(arxiv_id, format):
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), help="Output format")
+def info_cmd(arxiv_id, output_format):
     """
     Get detailed information about a specific asset.
     
@@ -102,9 +108,10 @@ def info_cmd(arxiv_id, format):
     
       remyxai search info 2010.11929v2
       remyxai search info 2010.11929v2 --format json
+      remyxai search info 2010.11929v2 -f json | jq -r .docker_image
     """
     try:
-        handle_info(arxiv_id, output_format=format)
+        handle_info(arxiv_id, output_format=output_format)
     except Exception as e:
         click.echo(f"❌ Error getting asset info: {e}", err=True)
 
@@ -114,7 +121,9 @@ def info_cmd(arxiv_id, format):
 @click.option("--offset", "-o", default=0, help="Pagination offset")
 @click.option("--category", "-c", multiple=True, help="Filter by arXiv category")
 @click.option("--docker/--no-docker", default=None, help="Filter by Docker availability")
-def list_cmd(limit, offset, category, docker):
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), help="Output format")
+def list_cmd(limit, offset, category, docker, output_format):
     """
     List recently added research assets.
     
@@ -123,6 +132,9 @@ def list_cmd(limit, offset, category, docker):
       remyxai search list
       remyxai search list --docker
       remyxai search list -n 10 -c cs.CV
+      
+      # Machine-readable output
+      remyxai search list --docker --format json | jq -r '.assets[].docker_image'
     """
     try:
         categories = list(category) if category else None
@@ -137,22 +149,27 @@ def list_cmd(limit, offset, category, docker):
             limit=limit, 
             offset=offset, 
             categories=categories,
-            has_docker=has_docker_filter
+            has_docker=has_docker_filter,
+            output_format=output_format
         )
     except Exception as e:
         click.echo(f"❌ Error listing assets: {e}", err=True)
 
 
 @search.command("stats")
-def stats_cmd():
+@click.option("--format", "-f", "output_format", default="text",
+              type=click.Choice(["text", "json"]), help="Output format")
+def stats_cmd(output_format):
     """
     Show statistics about available research assets.
     
-    Example:
+    Examples:
+    
       remyxai search stats
+      remyxai search stats --format json | jq .assets_with_docker
     """
     try:
-        handle_stats()
+        handle_stats(output_format=output_format)
     except Exception as e:
         click.echo(f"❌ Error getting stats: {e}", err=True)
 
