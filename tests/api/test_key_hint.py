@@ -21,9 +21,26 @@ def test_fingerprint_is_stable():
     assert key_fingerprint(_KEY) == key_fingerprint(_KEY)
 
 
-def test_fingerprint_matches_a_truncated_sha256():
-    expected = hashlib.sha256(_KEY.encode()).hexdigest()[:8]
-    assert key_fingerprint(_KEY) == f"sha256:{expected}"
+def test_fingerprint_matches_a_truncated_pbkdf2_digest():
+    from remyxai.api import _FINGERPRINT_ROUNDS, _FINGERPRINT_SALT
+
+    expected = hashlib.pbkdf2_hmac(
+        "sha256", _KEY.encode(), _FINGERPRINT_SALT, _FINGERPRINT_ROUNDS
+    ).hex()[:8]
+    assert key_fingerprint(_KEY) == f"fp:{expected}"
+
+
+def test_fingerprint_is_reproducible_across_processes():
+    """A per-run salt would make fingerprints incomparable, defeating the point."""
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "from remyxai.api import key_fingerprint; print(key_fingerprint(%r))" % _KEY],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert out == key_fingerprint(_KEY)
 
 
 def test_fingerprint_distinguishes_different_keys():

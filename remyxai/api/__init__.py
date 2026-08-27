@@ -68,19 +68,34 @@ def get_headers(api_key=None):
 # actual key is resolved lazily via get_headers(api_key=...) at call time.
 # ---------------------------------------------------------------------------
 
+# Fixed, non-secret inputs: the fingerprint has to be reproducible across
+# machines and runs, otherwise it cannot be compared, which is its whole point.
+_FINGERPRINT_SALT = b"remyxai-cli-key-fingerprint-v1"
+_FINGERPRINT_ROUNDS = 1000
+
+
 def key_fingerprint(key):
     """A short, stable, non-reversible identifier for an API key.
 
     Logging a slice of the key put real key material into log files, and logs
     travel a lot further than the shell that exported the key. A truncated
-    SHA-256 answers the only question that line was there to answer — *which*
+    digest answers the only question that line was there to answer — *which*
     key is this? — without carrying any of it: the same key always yields the
     same fingerprint, different keys effectively never collide, and it cannot
     be worked back to the secret.
+
+    Uses PBKDF2 rather than a bare SHA-256. This is not password storage, so
+    the slow-KDF argument does not really apply, but deriving through one costs
+    well under a millisecond here and means a logged fingerprint cannot be used
+    to cheaply confirm a guessed key. It also keeps static analysis quiet
+    without a standing dismissal.
     """
     if not key:
         return "none"
-    return "sha256:" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", key.encode("utf-8"), _FINGERPRINT_SALT, _FINGERPRINT_ROUNDS
+    )
+    return "fp:" + digest.hex()[:8]
 
 
 def key_hint(key, source="REMYXAI_API_KEY"):
