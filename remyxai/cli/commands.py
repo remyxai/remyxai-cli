@@ -657,6 +657,18 @@ def outrider():
                   "them alone. Requires an engine with force support "
                   "(remyxai/remyx#558); older ones ignore it."
               ))
+# The destination variable stays `byok`: that is the concept name the ticket,
+# the engine payload, and the stored `model_key_source` value all use. The
+# flag names the effect, which is what a customer needs to read.
+@click.option("--github-secrets-only", "byok", is_flag=True, default=False,
+              help=(
+                  "Keep your model-provider key in exactly one place: this "
+                  "repo's GitHub Actions secrets, where the run reads it. "
+                  "The key is encrypted on this machine against the repo's "
+                  "own public key, so Remyx relays ciphertext it cannot "
+                  "decrypt and stores no copy, and nothing is connected to "
+                  "your Remyx account. Run tracking is unaffected."
+              ))
 @click.option("--skip-key-check", "skip_key_check", is_flag=True, default=False,
               help=(
                   "Provision even when a tier's provider has no API key here "
@@ -690,7 +702,7 @@ def outrider_init(
     repo, interest_id, auto_interest, mode, anthropic_key,
     single_tier, provider, model,
     drafter_provider, drafter_model, refiner_provider, refiner_model,
-    force, skip_key_check,
+    force, skip_key_check, byok,
     no_wait, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
@@ -721,6 +733,16 @@ def outrider_init(
     MOONSHOT_API_KEY, via `gh`). A tier with no key either way stops the
     command before anything is provisioned — override with --skip-key-check.
 
+    --github-secrets-only narrows where those keys live to one place: the
+    repo's GitHub Actions secrets, which is where the run reads the key and
+    the only place it is needed. Each key is encrypted on this machine
+    against that repo's own Actions public key, so what reaches Remyx is
+    ciphertext it cannot decrypt — not "deleted after", but never readable,
+    because only GitHub holds the private half. Nothing is connected to your
+    Remyx account and `gh` isn't needed. Run tracking is unaffected: every
+    run authenticates to the engine with REMYX_API_KEY, and that is what
+    records it. The model key is decrypted only inside the ephemeral runner.
+
     Requires: the Remyx GitHub App installed on the repo (the command
     surfaces the install link if it isn't) and a connected model provider —
     connect one once on engine.remyx.ai/integrations and the CLI uses it
@@ -746,6 +768,10 @@ def outrider_init(
 
       # Plain single-file workflow:
       remyxai outrider init --repo owner/name --interest <uuid> --single-tier
+
+      # Key lives only in the repo's GitHub secrets; Remyx keeps no copy:
+      remyxai outrider init --repo owner/name --auto-interest \
+        --github-secrets-only
 
       # Change the tier config of a repo that's already set up:
       remyxai outrider init --repo owner/name --interest <uuid> \\
@@ -776,6 +802,7 @@ def outrider_init(
                 refiner_model=refiner_model,
                 force=force,
                 skip_key_check=skip_key_check,
+                byok=byok,
                 skip_confirm=skip_confirm,
                 dry_run=dry_run,
                 no_wait=no_wait,
@@ -798,6 +825,7 @@ def outrider_init(
         refiner_model=refiner_model,
         force=force,
         skip_key_check=skip_key_check,
+        byok=byok,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
         no_wait=no_wait,

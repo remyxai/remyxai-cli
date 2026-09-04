@@ -285,6 +285,33 @@ def toggle_interest(
 
 # ─── Outrider provisioning  ──────────────────────────────────────
 
+def get_actions_public_key(
+    interest_id: str,
+    repo_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The target repo's GitHub Actions public key, for client-side sealing.
+
+    Calls GET /api/v1.0/interests/<id>/provision-action/actions-public-key
+
+    Returns { repo, key_id, key, sealable_secret_names }. ``key`` is a
+    libsodium public key (base64): seal a provider key against it locally and
+    send only the ciphertext to ``provision_action``, so the plaintext never
+    leaves this machine. Only GitHub holds the private half.
+    """
+    params = {"repo_url": repo_url} if repo_url else {}
+    r = requests.get(
+        f"{BASE_URL}/interests/{interest_id}/provision-action/"
+        f"actions-public-key",
+        params=params,
+        headers=_h(api_key),
+        timeout=30,
+    )
+    log_api_response(r)
+    r.raise_for_status()
+    return r.json()
+
+
 def provision_action(
     interest_id: str,
     repo_url: Optional[str] = None,
@@ -294,6 +321,7 @@ def provision_action(
     phases: Optional[Dict[str, Any]] = None,
     model_provider: Optional[str] = None,
     force: bool = False,
+    sealed_provider_secrets: Optional[list] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -326,6 +354,14 @@ def provision_action(
                     installed. Without it the engine returns "Already enabled"
                     and leaves the workflow files — and their tier config — as
                     they are.
+        sealed_provider_secrets:
+                    BYOK (REMYX-296). Provider keys already sealed against
+                    this repo's Actions public key, as
+                    ``[{"secret_name", "key_id", "encrypted_value"}]``. The
+                    engine relays the ciphertext straight to GitHub — it
+                    cannot decrypt it and stores no credential for it. Sealed
+                    entries win over any key the engine would push from a
+                    connected credential for the same provider.
 
     Returns 202 { task_id, status_url }. Poll with poll_provision_action.
     """
@@ -342,6 +378,8 @@ def provision_action(
         payload["workflow_filename"] = workflow_filename
     if phases:
         payload["phases"] = phases
+    if sealed_provider_secrets:
+        payload["sealed_provider_secrets"] = list(sealed_provider_secrets)
 
     r = requests.post(
         f"{BASE_URL}/interests/{interest_id}/provision-action",

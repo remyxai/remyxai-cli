@@ -363,3 +363,202 @@ def test_plan_marks_the_workflow_default():
                                   connected=["zai", "anthropic"])
     lines = outrider_actions._describe_key_plan(plan)
     assert any("workflow default" in l and l.startswith("anthropic") for l in lines)
+
+
+# ─── --github-secrets-only: the key is sealed here, and Remyx never holds a copy ───────────
+#
+# REMYX-296. The promise is not "we delete it after" — it is "we cannot read
+# it". Two things have to hold for that to be true from this side:
+#
+#   * `connect_credential` is never called, because that call IS the stored
+#     copy the flag exists to avoid, and
+#   * what leaves the machine is ciphertext, never the key.
+#
+# Everything else (`gh` no longer being a precondition, the plan line the
+# customer reads before committing) follows from the routing.
+
+class _FakeSealedBox:
+    """Stand-in for libsodium: prefixes instead of encrypting, so a test can
+    tell sealed output from plaintext without needing a real key pair."""
+
+    def __init__(self, _public_key):
+        pass
+
+    def encrypt(self, raw):
+        return b"SEALED:" + raw
+
+
+def _seal_env(monkeypatch, sealable=("ANTHROPIC_API_KEY", "ZAI_API_KEY")):
+    """Patch the public-key fetch + the sealed box; capture what was sent."""
+    import sys
+    import types
+
+    nacl = types.ModuleType("nacl")
+    public = types.ModuleType("nacl.public")
+    encoding = types.ModuleType("nacl.encoding")
+    public.SealedBox = _FakeSealedBox
+    public.PublicKey = lambda data, encoder=None: object()
+    encoding.Base64Encoder = object
+    nacl.public, nacl.encoding = public, encoding
+    monkeypatch.setitem(sys.modules, "nacl", nacl)
+    monkeypatch.setitem(sys.modules, "nacl.public", public)
+    monkeypatch.setitem(sys.modules, "nacl.encoding", encoding)
+
+    monkeypatch.setattr(
+        "remyxai.api.interests.get_actions_public_key",
+        lambda *a, **k: {
+            "repo": "owner/repo", "key_id": "12345",
+            "key": "cHVibGljLWtleQ==",
+            "sealable_secret_names": list(sealable),
+        },
+    )
+
+
+def test_byok_routes_a_shell_key_to_the_sealed_lane_not_the_engine():
+    """A connected provider does NOT capture a key we're sealing — otherwise
+    the engine would push its stored copy over the customer's own."""
+    import os
+
+    os.environ["ZAI_API_KEY"] = FAKE_KEY
+    try:
+        plan = _plan_provider_secrets(
+            _phases(drafter="zai", refiner="zai"), ["zai"], byok=True,
+        )
+    finally:
+        del os.environ["ZAI_API_KEY"]
+
+    assert [p for p, _, _ in plan.sealed] == ["zai"]
+    assert plan.engine_providers == ()
+    assert plan.pushes == []
+    assert plan.missing == []
+    assert plan.preferred == "zai"
+
+
+def test_byok_never_falls_back_to_the_inline_anthropic_connect():
+    """Without --github-secrets-only, "nothing connected + key in env" is deliberately routed
+    through connect_credential. That branch is the stored copy, so under
+    --github-secrets-only the same input must seal instead."""
+    import os
+
+    os.environ["ANTHROPIC_API_KEY"] = FAKE_KEY
+    try:
+        plain = _plan_provider_secrets(_phases(), [], byok=False)
+        byok = _plan_provider_secrets(_phases(), [], byok=True)
+    finally:
+        del os.environ["ANTHROPIC_API_KEY"]
+
+    assert plain.engine_providers == ("anthropic",)   # the connect branch
+    assert byok.engine_providers == ()
+    assert [p for p, _, _ in byok.sealed] == ["anthropic"]
+
+
+def test_byok_leaves_an_unconnected_provider_without_a_local_key_missing():
+    plan = _plan_provider_secrets(
+        _phases(drafter="moonshot", refiner="moonshot"), [], byok=True,
+    )
+    assert plan.missing == ["moonshot"]
+    assert plan.sealed == ()
+
+
+def test_byok_keeps_a_connected_provider_it_has_no_local_key_for():
+    """--github-secrets-only declines to create NEW Remyx-side credentials; it doesn't disown
+    one the user already chose to connect."""
+    plan = _plan_provider_secrets(
+        _phases(drafter="zai", refiner="zai"), ["zai"], byok=True,
+    )
+    assert plan.engine_providers == ("zai",)
+    assert plan.sealed == ()
+
+
+def test_byok_does_not_require_gh():
+    """`gh` is a precondition only for the push lane. Sealed keys ride the
+    provision-action body, so an install with no `gh` on the machine works."""
+    import os
+
+    os.environ["ZAI_API_KEY"] = FAKE_KEY
+    try:
+        plan = _plan_provider_secrets(
+            _phases(drafter="zai", refiner="zai"), [], byok=True,
+        )
+    finally:
+        del os.environ["ZAI_API_KEY"]
+
+    assert plan.pushes == []
+    _require_gh_for_pushes(plan.pushes)  # must not raise; gh is never consulted
+
+
+def test_byok_plan_line_states_where_the_key_ends_up():
+    """--dry-run has to say this before the customer commits."""
+    import os
+
+    os.environ["ANTHROPIC_API_KEY"] = FAKE_KEY
+    try:
+        plan = _plan_provider_secrets(_phases(), [], byok=True)
+    finally:
+        del os.environ["ANTHROPIC_API_KEY"]
+
+    line = "\n".join(outrider_actions._describe_key_plan(plan))
+    # The three things the promise is made of: sealed here, GitHub-only,
+    # unreadable by us. Wording can change; all three have to survive it.
+    assert "sealed here" in line
+    assert "GitHub secret" in line and "only" in line
+    assert "Remyx can't read it" in line
+
+
+def test_only_ciphertext_leaves_the_machine(monkeypatch):
+    _seal_env(monkeypatch)
+    payload = outrider_actions._seal_provider_secrets(
+        UID, "https://github.com/owner/repo",
+        [("anthropic", "ANTHROPIC_API_KEY", FAKE_KEY)], api_key="k",
+    )
+    assert len(payload) == 1
+    entry = payload[0]
+    assert entry["secret_name"] == "ANTHROPIC_API_KEY"
+    assert entry["key_id"] == "12345"
+    # The plaintext must not survive anywhere in what we're about to POST.
+    assert FAKE_KEY not in str(entry)
+    import base64
+    assert base64.b64decode(entry["encrypted_value"]) == b"SEALED:" + FAKE_KEY.encode()
+
+
+def test_sealing_refuses_a_secret_name_the_engine_would_reject(monkeypatch):
+    """An older engine's allowlist won't have every name. Fail here with
+    something actionable rather than mid-install on an opaque 400."""
+    _seal_env(monkeypatch, sealable=("ANTHROPIC_API_KEY",))
+    with pytest.raises(click.ClickException) as e:
+        outrider_actions._seal_provider_secrets(
+            UID, "https://github.com/owner/repo",
+            [("zai", "ZAI_API_KEY", FAKE_KEY)], api_key="k",
+        )
+    assert "ZAI_API_KEY" in str(e.value)
+
+
+def test_ensure_model_provider_never_connects_under_byok(monkeypatch):
+    """The load-bearing assertion of this whole feature."""
+    called = []
+    monkeypatch.setattr(
+        outrider_actions, "connect_credential",
+        lambda *a, **k: called.append(a),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_KEY)
+
+    outrider_actions._ensure_model_provider(
+        None, "api-key", connected=[], byok=True,
+    )
+    assert called == [], "connect_credential must never run under --github-secrets-only"
+
+    # ...and the same input DOES connect without the flag, so the test is
+    # pinning the flag's behavior rather than a dead code path.
+    outrider_actions._ensure_model_provider(None, "api-key", connected=[])
+    assert len(called) == 1
+
+
+def test_validate_hints_do_not_tell_a_byok_user_to_connect(monkeypatch):
+    plan = _plan_provider_secrets(
+        _phases(drafter="moonshot", refiner="moonshot"), [], byok=True,
+    )
+    with pytest.raises(click.ClickException) as e:
+        _validate_provider_keys(plan, byok=True)
+    msg = str(e.value)
+    assert "seals it and relays it" in msg
+    assert "drop --github-secrets-only" in msg
