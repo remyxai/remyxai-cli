@@ -22,6 +22,7 @@ user's REMYX_API_KEY. Flow:
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -97,6 +98,11 @@ PROVIDER_INTEGRATION_IDS = {
 # Twin of ``outrider_local._BACKEND_REGISTRY[*]["secret_env"]``; kept separate
 # only because that module imports this one (no cycle allowed). A test asserts
 # the two agree.
+# The user-facing name of the "keys live only in GitHub Actions secrets"
+# flag. Held in one place so the messages that teach it can't drift from the
+# option that implements it (commands.outrider_init).
+BYOK_FLAG = "--github-secrets-only"
+
 _PROVIDER_SECRET_NAMES = {
     "anthropic": "ANTHROPIC_API_KEY",
     "zai": "ZAI_API_KEY",
@@ -355,7 +361,7 @@ def _resolve_connected_provider(api_key):
     return connected[0] if connected else None
 
 
-def _ensure_model_provider(anthropic_key, api_key, connected=None):
+def _ensure_model_provider(anthropic_key, api_key, connected=None, byok=False):
     """Ensure *some* model provider is connected. Returns True if so.
 
     Any provider counts equally — Claude Code (Anthropic), Z.ai, or
@@ -364,6 +370,10 @@ def _ensure_model_provider(anthropic_key, api_key, connected=None):
 
     ``connected`` accepts an already-resolved list from ``_connected_providers``
     so the init flow doesn't re-query integration status it just read.
+
+    ``byok`` — never create a Remyx-side credential. Under --github-secrets-only the key in
+    this shell is sealed to the repo instead, so the inline connect below
+    (which is what puts a copy on Remyx's servers) must not run. Warn only.
     """
     connected = (
         _connected_providers(api_key) if connected is None else list(connected)
@@ -371,6 +381,15 @@ def _ensure_model_provider(anthropic_key, api_key, connected=None):
     if connected:
         click.echo(f"✓ Model provider connected ({', '.join(connected)})")
         return True
+
+    if byok:
+        # The key plan already routed this shell's keys to the sealed lane;
+        # a missing one is reported by _validate_provider_keys, not here.
+        click.echo(
+            f"  No Remyx-side provider credential ({BYOK_FLAG}) — the key is\n"
+            "  sealed from this shell straight into the repo's GitHub secrets."
+        )
+        return False
 
     # No provider connected. The inline --anthropic-key / $ANTHROPIC_API_KEY
     # shortcut connects an Anthropic key (the only key flag on this command
@@ -420,6 +439,11 @@ class ProviderKeyPlan(NamedTuple):
         credential the engine bakes as the workflow's default.
     pushes: ``(provider, secret_name, key)`` this CLI must push with `gh` —
         only providers that aren't connected.
+    sealed: ``(provider, secret_name, key)`` sealed on this machine and
+        relayed to the repo through the engine (--github-secrets-only). Same tuple shape as
+        ``pushes``; the difference is transport — no `gh`, and Remyx handles
+        only ciphertext. Mutually exclusive with ``pushes`` for a given
+        provider.
     missing: providers with no key anywhere — a hard failure.
     connected: the account's connected providers, for diagnosis.
     """
@@ -428,6 +452,7 @@ class ProviderKeyPlan(NamedTuple):
     pushes: list
     missing: list
     connected: tuple = ()
+    sealed: tuple = ()
 
 
 def _provider_env_key(provider, anthropic_key=None):
@@ -456,39 +481,65 @@ def _tier_providers(phases):
     return out
 
 
-def _plan_provider_secrets(phases, connected, anthropic_key=None):
+def _plan_provider_secrets(phases, connected, anthropic_key=None, byok=False):
     """Route each tier provider's key to the repo; report what's unroutable.
 
     ``connected`` is the account's connected providers (workflow values, from
     ``_connected_providers``). When ``phases`` pins no provider, the tier list
     falls back to what the engine would bake into the workflow: the first
     connected provider, else anthropic.
+
+    ``byok`` — a tier provider whose key is in this shell goes to the SEALED
+    lane: encrypted here against the repo's Actions public key and relayed as
+    ciphertext, so Remyx never holds it. Two consequences worth stating
+    plainly: nothing gets connected inline (that is the copy --github-secrets-only exists to
+    avoid), and a provider you have *already* connected still rides the engine
+    lane when this shell has no key for it — --github-secrets-only declines to create new
+    Remyx-side credentials, it doesn't disown the ones you chose to make.
     """
     tiers = _tier_providers(phases) or (
         [connected[0]] if connected else ["anthropic"]
     )
     env = {p: _provider_env_key(p, anthropic_key) for p in tiers}
 
+    # Under --github-secrets-only this shell's keys are sealed, so they never fall to the
+    # engine lane even for a provider that happens to be connected.
+    sealed = (
+        [(p, _PROVIDER_SECRET_NAMES[p], key)
+         for p, key in env.items() if key]
+        if byok else []
+    )
+    sealed_providers = {p for p, _, _ in sealed}
+
     # Every tier provider you've connected is covered server-side.
-    engine_providers = [p for p in tiers if p in connected]
-    if not engine_providers and not connected and env.get("anthropic"):
+    engine_providers = [
+        p for p in tiers if p in connected and p not in sealed_providers
+    ]
+    if (not byok and not engine_providers and not connected
+            and env.get("anthropic")):
         # Nothing connected, but --anthropic-key / $ANTHROPIC_API_KEY gets
         # connected inline during preflight — the engine pushes that one.
+        # Never under --github-secrets-only: that inline connect is the stored copy.
         engine_providers = ["anthropic"]
 
     # `model_provider` decides which credential the engine bakes as the
     # workflow's default, so name the capable tier (refiner/main) when it's
     # covered; otherwise the first covered tier.
-    late_tiers = [p for p in reversed(tiers) if p in engine_providers]
+    covered = set(engine_providers) | sealed_providers
+    late_tiers = [p for p in reversed(tiers) if p in covered]
     preferred = late_tiers[0] if late_tiers else None
 
-    pushes = [
+    pushes = [] if byok else [
         (p, _PROVIDER_SECRET_NAMES[p], key)
         for p, key in env.items() if key and p not in engine_providers
     ]
-    missing = [p for p in tiers if not env[p] and p not in engine_providers]
+    missing = [
+        p for p in tiers
+        if not env[p] and p not in engine_providers and p not in sealed_providers
+    ]
     return ProviderKeyPlan(
         tuple(engine_providers), preferred, pushes, missing, tuple(connected),
+        tuple(sealed),
     )
 
 
@@ -500,6 +551,12 @@ def _describe_key_plan(plan):
         lines.append(
             f"{provider} — pushed by the engine from your connected "
             f"credential{default}"
+        )
+    for provider, secret_name, _ in plan.sealed:
+        default = " (workflow default)" if provider == plan.preferred else ""
+        lines.append(
+            f"{provider} — {secret_name} sealed here → GitHub secret on the "
+            f"repo only; Remyx can't read it{default}"
         )
     for provider, secret_name, _ in plan.pushes:
         lines.append(
@@ -514,7 +571,7 @@ def _describe_key_plan(plan):
     return lines
 
 
-def _validate_provider_keys(plan, skip_key_check=False):
+def _validate_provider_keys(plan, skip_key_check=False, byok=False):
     """Hard-fail on a tier whose provider has no key — at plan time.
 
     Provisioning succeeds regardless (it's just secrets + a workflow file), so
@@ -527,14 +584,21 @@ def _validate_provider_keys(plan, skip_key_check=False):
     fixes = []
     for provider in plan.missing:
         secret_name = _PROVIDER_SECRET_NAMES[provider]
+        how = ("seals it and relays it to the repo" if byok
+               else "pushes it to the repo as a secret")
+        fixes.append(f"    - export {secret_name}=… and re-run (init {how})")
+    if byok:
         fixes.append(
-            f"    - export {secret_name}=… and re-run (init pushes it to the "
-            f"repo as a secret)"
+            f"    - or drop {BYOK_FLAG} and connect the provider at "
+            "engine.remyx.ai/integrations (that keeps a copy of the key on "
+            f"Remyx, which is what {BYOK_FLAG} avoids)"
         )
-    fixes.append(
-        "    - connect the provider at engine.remyx.ai/integrations, then "
-        "re-run (the engine pushes a key for every provider you've connected)"
-    )
+    else:
+        fixes.append(
+            "    - connect the provider at engine.remyx.ai/integrations, then "
+            "re-run (the engine pushes a key for every provider you've "
+            "connected)"
+        )
     fixes.append(
         "    - point that tier at a provider you have connected (--provider / "
         "--drafter-provider / --refiner-provider)"
@@ -577,6 +641,73 @@ def _require_gh_for_pushes(pushes):
             f"authenticated. Run `gh auth login` (admin scope on the repo) and "
             f"re-run."
         )
+
+
+def _seal_provider_secrets(interest_id, repo_url, sealed, api_key):
+    """Seal each provider key against the repo's Actions public key.
+
+    GitHub Actions secrets are libsodium sealed boxes and only GitHub holds
+    the private half, so a key encrypted here is one Remyx is mathematically
+    unable to read — it relays the ciphertext and keeps nothing. That is the
+    whole point of --github-secrets-only: not "deleted after", but "never readable".
+
+    Returns the ``sealed_provider_secrets`` payload for ``provision_action``.
+    """
+    if not sealed:
+        return []
+    try:
+        from nacl import encoding, public
+    except ImportError:
+        raise click.ClickException(
+            f"{BYOK_FLAG} needs PyNaCl to encrypt your key locally. Install it "
+            "with `pip install pynacl` (or reinstall remyxai) and re-run."
+        )
+    from remyxai.api.interests import get_actions_public_key
+
+    try:
+        pk = get_actions_public_key(
+            interest_id, repo_url=repo_url, api_key=api_key
+        )
+    except Exception as e:
+        raise click.ClickException(
+            f"could not read the repo's Actions public key, so there is "
+            f"nothing to seal against: {e}"
+        )
+    sealable = set(pk.get("sealable_secret_names") or [])
+    box = public.SealedBox(
+        public.PublicKey(pk["key"].encode("utf-8"), encoding.Base64Encoder)
+    )
+
+    payload = []
+    for provider, secret_name, key in sealed:
+        if sealable and secret_name not in sealable:
+            # The engine validates against its own provider registry; a name
+            # it won't accept would fail mid-install with an opaque 400.
+            raise click.ClickException(
+                f"the engine won't accept {secret_name} as a sealed secret "
+                f"(it accepts: {', '.join(sorted(sealable))}). Upgrade the "
+                f"engine or drop {BYOK_FLAG} for {provider}."
+            )
+        if len(key) < _SECRET_MIN_LENGTH_WARN:
+            click.secho(
+                f"⚠ {secret_name} is {len(key)} chars — unusually short for "
+                f"an API key. Sealing it anyway, but the action's auth guard "
+                f"may reject it.",
+                fg="yellow",
+            )
+        ciphertext = base64.b64encode(
+            box.encrypt(key.encode("utf-8"))
+        ).decode("utf-8")
+        payload.append({
+            "secret_name": secret_name,
+            "key_id": pk["key_id"],
+            "encrypted_value": ciphertext,
+        })
+        click.echo(
+            f"  Sealed {secret_name} for {pk.get('repo') or repo_url} "
+            f"(provider={provider}) — ciphertext only leaves this machine."
+        )
+    return payload
 
 
 def _push_provider_secrets(repo, pushes):
@@ -683,10 +814,16 @@ def handle_outrider_init(
     single_tier=False, provider=None, model=None,
     drafter_provider=None, drafter_model=None,
     refiner_provider=None, refiner_model=None,
-    force=False, skip_key_check=False,
+    force=False, skip_key_check=False, byok=False,
 ):
     """Set up Outrider on a repo via the Remyx engine. Called from
-    commands.outrider_init."""
+    commands.outrider_init.
+
+    ``byok`` — seal this shell's provider keys against the repo's Actions
+    public key and hand the engine only ciphertext, so no copy is stored on
+    Remyx. For customers whose policy forbids giving model-provider keys to a
+    third party.
+    """
     if interest_id and auto_interest:
         raise click.UsageError(
             "--interest and --auto-interest are mutually exclusive."
@@ -724,7 +861,9 @@ def handle_outrider_init(
         drafter_provider, drafter_model, refiner_provider, refiner_model,
         default_provider=default_provider,
     )
-    key_plan = _plan_provider_secrets(phases, connected, anthropic_key)
+    key_plan = _plan_provider_secrets(
+        phases, connected, anthropic_key, byok=byok
+    )
 
     # 4. Plan
     mode_desc = {
@@ -777,7 +916,10 @@ def handle_outrider_init(
     # 4b. Refuse now if a tier's key can't reach the repo — provisioning
     # itself would succeed and the failure would surface one dispatch later.
     if mode != "off":
-        _validate_provider_keys(key_plan, skip_key_check=skip_key_check)
+        _validate_provider_keys(
+            key_plan, skip_key_check=skip_key_check, byok=byok
+        )
+        # Sealed keys never touch `gh` — they ride the provision-action body.
         _require_gh_for_pushes(key_plan.pushes)
 
     if dry_run:
@@ -805,7 +947,9 @@ def handle_outrider_init(
 
     # 6. Preflight: App install + model provider (only needed to provision)
     _ensure_app_installed(resolved_repo, api_key, no_wait)
-    _ensure_model_provider(anthropic_key, api_key, connected=connected)
+    _ensure_model_provider(
+        anthropic_key, api_key, connected=connected, byok=byok
+    )
 
     # 6b. Push the tier provider secrets the engine won't. Done BEFORE
     # provisioning because `auto` mode fires the first run as its last step —
@@ -813,6 +957,19 @@ def handle_outrider_init(
     if key_plan.pushes:
         click.echo("\nSetting tier provider secrets on the repo…")
         _push_provider_secrets(resolved_repo, key_plan.pushes)
+
+    # 6b-bis. Seal the BYOK keys. Done here (not at plan time) because the
+    # public key is fetched per interest+repo, and the interest may only have
+    # been created a step ago. The ciphertext rides the provision-action body
+    # so the engine writes it in the same pass that sets REMYX_API_KEY.
+    sealed_payload = []
+    if key_plan.sealed:
+        click.echo(
+            "\nSealing provider keys into the repo's GitHub secrets…"
+        )
+        sealed_payload = _seal_provider_secrets(
+            resolved_interest, repo_url, key_plan.sealed, api_key
+        )
 
     # 6c. Pre-warm recommendations so the first run has picks to open a PR
     # from. A brand-new interest ranks asynchronously; firing the Outrider
@@ -840,6 +997,7 @@ def handle_outrider_init(
         # way. Unset, it would take the first connected provider, which on a
         # mixed install isn't necessarily the capable tier.
         model_provider=PROVIDER_INTEGRATION_IDS.get(key_plan.preferred),
+        sealed_provider_secrets=sealed_payload,
         api_key=api_key,
     )
     task_id = resp.get("task_id")
@@ -875,9 +1033,15 @@ def handle_outrider_init(
         )
     else:
         click.echo("  Next: merge the setup PR to activate Outrider.")
+    for provider, secret_name, _ in key_plan.sealed:
+        click.echo(
+            f"  Repo secret {secret_name}: set from your sealed key "
+            f"(provider={provider}) — Remyx holds no copy"
+        )
     for provider, secret_name, _ in key_plan.pushes:
         click.echo(f"  Repo secret {secret_name}: set (provider={provider})")
-    if result.get("model_key_missing") and not key_plan.pushes:
+    if (result.get("model_key_missing")
+            and not key_plan.pushes and not key_plan.sealed):
         click.secho(
             "  ⚠ No model provider key set — connect a provider at "
             "engine.remyx.ai/integrations (or export its API key and re-run) "

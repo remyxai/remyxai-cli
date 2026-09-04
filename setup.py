@@ -6,11 +6,15 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="remyxai",
-    version="0.4.11",
+    version="0.4.12",
     packages=find_packages(include=["remyxai", "remyxai.*"]),
     install_requires=[
         "click",
         "requests",
+        # `outrider init --byok` seals provider keys against the repo's
+        # Actions public key locally (libsodium sealed box), so the plaintext
+        # never leaves the machine.
+        "pynacl",
     ],
     entry_points={
         "console_scripts": [

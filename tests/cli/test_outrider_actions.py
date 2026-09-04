@@ -299,6 +299,7 @@ def test_outrider_init_passes_args_through(mock_handler):
         refiner_model=None,
         force=False,
         skip_key_check=False,
+        byok=False,
         skip_confirm=True,
         dry_run=False,
         no_wait=False,
