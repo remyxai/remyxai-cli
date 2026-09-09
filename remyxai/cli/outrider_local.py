@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from typing import Optional
@@ -420,6 +421,7 @@ def _render_local_workflow(
     agent_options = "\n".join(
         f"          - {name}" for name in agent_matrix.known_agents()
     )
+    action_uses = f"{_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF}"
     secret_env_block = "\n".join(
         f"          {name}: ${{{{ secrets.{name} }}}}"
         for name in _workflow_secret_names()
@@ -507,7 +509,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: remyxai/outrider@v1
+      - uses: {action_uses}
         env:
           # Every provider secret and every agent credential the action might
           # read, generated from its published matrix so a provider added
@@ -565,7 +567,22 @@ jobs:
 # See remyxai/outrider docs/customization.md §5 for the design rationale.
 
 _OUTRIDER_TEMPLATE_REPO = "remyxai/outrider"
-_OUTRIDER_TEMPLATE_REF = "v1"  # moves with each Outrider action release
+
+#: The action ref a generated workflow pins, and the ref templates are
+#: fetched from. ``v1`` is a moving tag that advances with each release, so
+#: customer installs pick up action changes without a CLI release.
+#:
+#: ``REMYXAI_OUTRIDER_ACTION_REF`` overrides it, which is how you exercise an
+#: action change that has not shipped yet — install a repo against the branch,
+#: dispatch it, and see the real thing run. Deliberately an env var rather
+#: than a flag: pointing customer installs at an unreleased ref is a testing
+#: move, not a supported configuration, and an env var cannot be reached for
+#: by accident the way a tab-completed flag can.
+#:
+#: Read at import so a single export covers a whole session.
+_OUTRIDER_TEMPLATE_REF = (
+    os.environ.get("REMYXAI_OUTRIDER_ACTION_REF", "").strip() or "v1"
+)
 _DRAFTER_TEMPLATE_PATH = ".github/workflows/outrider-daily.yml"
 _REFINER_TEMPLATE_PATH = ".github/workflows/outrider-weekly-refine.yml"
 

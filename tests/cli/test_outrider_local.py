@@ -913,3 +913,39 @@ def test_the_generated_workflow_says_nothing_claude_specific():
         wf = outrider_local._render_local_workflow("uuid", agent=agent)
         assert "route Claude Code at" not in wf
         assert "Claude Code skill" not in wf
+
+
+# ─── pinning an unreleased action ref ──────────────────────────────────────
+
+
+def test_the_generated_workflow_pins_v1_by_default():
+    """`v1` is a moving tag, so customer installs pick up action changes
+    without needing a CLI release. That default must not drift."""
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "uses: remyxai/outrider@v1" in wf
+
+
+def test_the_action_ref_can_be_overridden_for_testing(monkeypatch):
+    """How an unreleased action change gets exercised end-to-end: install a
+    repo against the branch, dispatch it, watch the real thing run.
+
+    An env var rather than a flag on purpose — pointing a customer install at
+    an unreleased ref is a testing move, not a supported configuration, and
+    an env var cannot be reached for by accident the way a tab-completed flag
+    can. `_OUTRIDER_TEMPLATE_REF` is read at import, so this reloads.
+    """
+    import importlib
+
+    branch = "salma/some-feature-branch"
+    monkeypatch.setenv("REMYXAI_OUTRIDER_ACTION_REF", branch)
+    reloaded = importlib.reload(outrider_local)
+    try:
+        wf = reloaded._render_local_workflow("uuid")
+        assert f"uses: remyxai/outrider@{branch}" in wf
+        # The two-tier templates are fetched from the same ref, or an install
+        # would mix a branch action with v1's templates.
+        assert reloaded._OUTRIDER_TEMPLATE_REF == branch
+        assert reloaded._PUBLISHED_ACTION_USES.endswith(f"@{branch}")
+    finally:
+        monkeypatch.delenv("REMYXAI_OUTRIDER_ACTION_REF", raising=False)
+        importlib.reload(outrider_local)
