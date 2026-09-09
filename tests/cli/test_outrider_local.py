@@ -812,11 +812,14 @@ def test_setup_local_agent_flag_reaches_the_rendered_workflow(monkeypatch):
     result = CliRunner().invoke(cli, [
         "outrider", "setup-local", "--repo", "owner/name",
         "--interest", "00000000-0000-0000-0000-000000000000",
-        "--agent", "codex", "--dry-run", "--yes",
+        "--agent", "codex", "--backend", "openai",
+        "--dry-run", "--yes",
     ])
     assert result.exit_code == 0, result.output
     assert "default: 'codex'" in result.output
     assert "agent: ${{ inputs.agent }}" in result.output
+    # The token for *this pair*, and only that one.
+    assert "OPENAI_API_KEY" in result.output
 
 
 # ─── gateway model ids ─────────────────────────────────────────────────────
@@ -1009,3 +1012,89 @@ def test_each_install_default_is_itself_dispatchable():
                     f"{name} default {spec['default']!r} is not among its own "
                     f"options {spec['options']}"
                 )
+
+
+# ─── the install pair, and the one token it needs ──────────────────────────
+
+
+def _install(agent, backend, monkeypatch):
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    return CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", agent, "--backend", backend, "--dry-run", "--yes",
+    ])
+
+
+@pytest.mark.parametrize("agent,backend", [
+    ("codex", "anthropic"),
+    ("codex", "zai"),
+])
+def test_an_impossible_install_pair_is_rejected(agent, backend, monkeypatch):
+    """It used to install cleanly and leave a workflow that could never run.
+
+    `--agent codex --backend anthropic` wrote ANTHROPIC_API_KEY — the wrong
+    token for a Codex run — and set the generated workflow's own defaults to
+    a pair Codex cannot speak, so every scheduled dispatch failed on a
+    configuration the CLI had just accepted. The pair is checked before
+    anything is written now, with the message naming the agent that works.
+    """
+    result = _install(agent, backend, monkeypatch)
+    assert result.exit_code != 0
+    assert "does not serve" in result.output
+    assert "--agent claude" in result.output
+
+
+@pytest.mark.parametrize("agent,backend,expected_secret", [
+    ("claude", "anthropic", "ANTHROPIC_API_KEY"),
+    ("claude", "zai", "ZAI_API_KEY"),
+    ("codex", "openai", "OPENAI_API_KEY"),
+    ("codex", "moonshot", "MOONSHOT_API_KEY"),
+    ("backboard", "openai", "BACKBOARD_API_KEY"),
+])
+def test_the_install_prompts_for_exactly_the_pairs_own_token(
+    agent, backend, expected_secret, monkeypatch
+):
+    """One token, and the right one.
+
+    Not always the provider's: a native router reaches every provider on its
+    own credential, so `backboard` + `openai` needs BACKBOARD_API_KEY and not
+    OPENAI_API_KEY.
+    """
+    result = _install(agent, backend, monkeypatch)
+    assert result.exit_code == 0, result.output
+    secrets_line = next(
+        (l for l in result.output.splitlines() if "- Secrets:" in l), ""
+    )
+    assert expected_secret in secrets_line, secrets_line
+    others = {
+        "ANTHROPIC_API_KEY", "ZAI_API_KEY", "MOONSHOT_API_KEY",
+        "OPENAI_API_KEY", "OPENROUTER_API_KEY", "BACKBOARD_API_KEY",
+    } - {expected_secret}
+    for other in others:
+        assert other not in secrets_line, (
+            f"{other} is also being set for {agent} + {backend}; only the "
+            f"pair's own token should be"
+        )
+
+
+def test_every_agent_can_be_installed_with_some_backend():
+    """`--backend` has to offer each agent a provider it can actually speak.
+
+    It was bounded to the anthropic-messages set, so `--agent codex` was
+    offered alongside only providers Codex cannot use — every pair on the
+    flag was either invalid or, for moonshot, valid by luck.
+    """
+    from remyxai import agent_matrix
+
+    for agent in agent_matrix.known_agents():
+        usable = [
+            b for b in outrider_local.TWO_TIER_BACKEND_CHOICES
+            if agent_matrix.first_error(agent_matrix.check_pair(agent, b)) is None
+        ]
+        assert usable, f"no --backend value is valid for --agent {agent}"

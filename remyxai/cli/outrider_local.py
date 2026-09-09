@@ -260,6 +260,17 @@ _STAGE_POLICY: dict = {
 }
 
 
+#: Wall-clock budget for a provider `_STAGE_POLICY` has no row for.
+#:
+#: `--backend` has to offer every provider a *selected agent* can reach, or
+#: `--agent codex` is offered alongside only providers Codex cannot speak to
+#: — which is what happened: `--agent codex --backend anthropic` installed
+#: cleanly and produced a workflow whose own defaults were an impossible
+#: pair. Providers outside the two-tier set therefore need a timeout, and
+#: the generous value is the right default for an unknown backend.
+_DEFAULT_STAGE_TIMEOUT = "3600"
+
+
 def _build_backend_registry() -> dict:
     """Join this CLI's policy onto the action's published provider facts.
 
@@ -269,15 +280,34 @@ def _build_backend_registry() -> dict:
     rather than from a hand-maintained field.
     """
     registry = {}
-    for provider, policy in _STAGE_POLICY.items():
-        if agent_matrix.provider_info(provider) is None:
+    # `_STAGE_POLICY` order first, then the rest alphabetically. Order is not
+    # cosmetic: `providers_for_stages` returns registry order and the two-tier
+    # install treats the first entry as the primary secret, so reordering
+    # would change which key a two-tier install names in its summary and
+    # rollback path.
+    ordered = list(_STAGE_POLICY) + [
+        p for p in agent_matrix.known_providers() if p not in _STAGE_POLICY
+    ]
+    for provider in ordered:
+        info = agent_matrix.provider_info(provider)
+        if info is None:
             raise RuntimeError(
                 f"the vendored agent matrix has no provider {provider!r}, "
-                f"which this CLI's two-tier install depends on. Refresh it: "
+                f"which this CLI depends on. Refresh it: "
                 f"python scripts/sync_agent_matrix.py"
             )
+        if not info["secret_env"]:
+            # `custom` brings its own endpoint and auth; there is no
+            # conventional secret to prompt for, so it is not installable
+            # as a default here.
+            continue
+        policy = _STAGE_POLICY.get(provider, {})
         registry[provider] = dict(
             policy,
+            default_claude_timeout=policy.get(
+                "default_claude_timeout", _DEFAULT_STAGE_TIMEOUT
+            ),
+            model_prefixes=policy.get("model_prefixes", ()),
             secret_env=agent_matrix.secret_env("claude", provider),
             base_url=agent_matrix.endpoint("claude", provider) or None,
             display_name=agent_matrix.provider_display_name(provider),
@@ -1031,9 +1061,30 @@ def handle_outrider_setup_local(
         backend_secret_env = next(iter(stage_secrets))
         backend_secret_value = stage_secrets[backend_secret_env]
     else:
+        # Reject an impossible (agent, backend) pair before writing anything.
+        # `--agent codex --backend anthropic` used to install cleanly, write
+        # ANTHROPIC_API_KEY — the wrong token for a Codex run — and leave a
+        # workflow whose own defaults could never succeed, so every scheduled
+        # run failed on a config the CLI had just told the user was fine.
+        for problem in agent_matrix.check_pair(agent, backend):
+            if problem.is_error:
+                raise click.UsageError(
+                    problem.message.replace("--agent", "--agent")
+                    + f" (installing agent={agent} with --backend {backend})"
+                )
+            click.secho(f"⚠ {problem.message}", fg="yellow")
+
         reg = _BACKEND_REGISTRY[backend]
-        backend_secret_env = reg["secret_env"]
-        display = reg["display_name"]
+        # The credential for *this pair*, which is not always the provider's:
+        # a native router uses its own key for every provider it reaches.
+        backend_secret_env = (
+            agent_matrix.secret_env(agent, backend) or reg["secret_env"]
+        )
+        display = (
+            agent_matrix.agent_display_name(agent)
+            if agent_matrix.is_native_router(agent)
+            else reg["display_name"]
+        )
         legacy_flag_value = {"anthropic": anthropic_key, "zai": zai_key}.get(backend)
         backend_secret_value = (
             legacy_flag_value
@@ -1047,7 +1098,8 @@ def handle_outrider_setup_local(
             )
         if backend_secret_value is not None and not backend_secret_value.strip():
             raise click.ClickException(
-                f"{backend_secret_env} is required for --backend {backend}."
+                f"{backend_secret_env} is required for agent={agent} with "
+                f"--backend {backend}."
             )
         # Populate historical variables so downstream references remain
         # consistent (they're only used in the two-tier path today, so this
