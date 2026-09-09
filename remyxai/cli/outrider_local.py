@@ -415,8 +415,18 @@ def _render_local_workflow(
         )
     reg = _BACKEND_REGISTRY[backend]
     default_timeout = reg["default_claude_timeout"]
+    # Every provider the ACTION knows, not just the ones this template can
+    # render a default for. The two are different questions and conflating
+    # them broke a real dispatch: `--backend` picks the install default and
+    # is bounded by `_STAGE_POLICY`, but the `provider` *input* exists so a
+    # single install can switch per dispatch — which is the whole point of
+    # the axis. Building the choice list from `_BACKEND_REGISTRY` left
+    # `openai` off it, so a `codex` + `openai` dispatch the CLI had just
+    # validated came back from GitHub as
+    # "Provided value 'openai' for input 'provider' not in the list of
+    # allowed values".
     provider_options = "\n".join(
-        f"          - {name}" for name in _BACKEND_REGISTRY
+        f"          - {name}" for name in agent_matrix.known_providers()
     )
     agent_options = "\n".join(
         f"          - {name}" for name in agent_matrix.known_agents()

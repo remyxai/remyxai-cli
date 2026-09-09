@@ -949,3 +949,46 @@ def test_the_action_ref_can_be_overridden_for_testing(monkeypatch):
     finally:
         monkeypatch.delenv("REMYXAI_OUTRIDER_ACTION_REF", raising=False)
         importlib.reload(outrider_local)
+
+
+def test_the_workflows_provider_options_cover_everything_the_cli_accepts():
+    """The CLI must not validate a pair GitHub will then reject.
+
+    Found live: `trigger --agent codex --provider openai` passed the local
+    pair check and came back from GitHub as "Provided value 'openai' for
+    input 'provider' not in the list of allowed values". The choice list was
+    built from `_BACKEND_REGISTRY` — the set this template can render an
+    install *default* for — when the `provider` input exists so one install
+    can switch per dispatch, which is the whole point of the axis.
+
+    Two different questions, and conflating them is only visible from
+    outside, at dispatch time.
+    """
+    yaml = pytest.importorskip("yaml")
+    from remyxai import agent_matrix
+
+    wf = yaml.safe_load(outrider_local._render_local_workflow("uuid"))
+    on = wf.get("on") or wf.get(True)
+    options = set(on["workflow_dispatch"]["inputs"]["provider"]["options"])
+    assert set(agent_matrix.known_providers()) <= options, (
+        f"dispatchable providers are narrower than the matrix: missing "
+        f"{sorted(set(agent_matrix.known_providers()) - options)}"
+    )
+
+
+def test_each_install_default_is_itself_dispatchable():
+    """A `type: choice` input whose default is absent from its own options is
+    rejected by GitHub outright."""
+    yaml = pytest.importorskip("yaml")
+
+    for backend in outrider_local.TWO_TIER_BACKEND_CHOICES:
+        for agent in ("claude", "codex", "backboard"):
+            wf = yaml.safe_load(outrider_local._render_local_workflow(
+                "uuid", backend=backend, agent=agent))
+            on = wf.get("on") or wf.get(True)
+            for name in ("provider", "agent"):
+                spec = on["workflow_dispatch"]["inputs"][name]
+                assert spec["default"] in spec["options"], (
+                    f"{name} default {spec['default']!r} is not among its own "
+                    f"options {spec['options']}"
+                )
