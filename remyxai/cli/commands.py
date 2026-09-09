@@ -26,6 +26,7 @@ from remyxai.cli.interest_actions import (
 )
 from remyxai.cli.outrider_actions import (
     PROVIDER_CHOICES,
+    SECRET_PROVIDER_CHOICES,
     _parse_bulk_repos_tsv,
     _run_bulk,
     handle_outrider_init,
@@ -1218,11 +1219,13 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
 @click.option("--repo", "repo", default=None,
               help="Target repo (owner/name). Defaults to the cwd's git remote.")
 @click.option("--provider", "provider", required=True,
-              type=click.Choice(PROVIDER_CHOICES),
+              type=click.Choice(SECRET_PROVIDER_CHOICES),
               help=(
                   "Which provider's API key this is for. Selects the secret "
-                  "name (anthropic→ANTHROPIC_API_KEY, zai→ZAI_API_KEY, "
-                  "moonshot→MOONSHOT_API_KEY)."
+                  "name by the <VENDOR>_API_KEY convention — anthropic→"
+                  "ANTHROPIC_API_KEY, zai→ZAI_API_KEY, and so on. Covers "
+                  "every provider the action understands, which is wider "
+                  "than the set `init` can provision through the engine."
               ))
 @click.option("--key-from", "key_from", required=True,
               type=click.Path(exists=True, dir_okay=False, readable=True),

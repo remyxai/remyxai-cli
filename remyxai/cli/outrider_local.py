@@ -29,6 +29,8 @@ from typing import Optional
 
 import click
 
+from remyxai import agent_matrix
+
 # Shared helpers with the engine path (repo parsing + interest resolution).
 from remyxai.cli.outrider_actions import (
     _detect_github_repo_from_cwd,
@@ -211,54 +213,84 @@ def _gh_dispatch(repo: str, branch: str) -> bool:
 
 # ─── backend registry ──────────────────────────────────────────────────────
 #
-# One entry per Anthropic-Messages-compat backend the Outrider action's
-# `provider` input recognizes (added in outrider v1.7.29). The registry
-# drives (a) which secret env var to prompt/read for the selected backend,
-# (b) the generated workflow's per-backend defaults (model, claude-timeout),
-# and (c) the workflow_dispatch `provider` choice list.
+# Facts about a provider — its secret env var, its endpoint, its display name,
+# its default model — are NOT written here. They come from the action's
+# published compatibility matrix via :mod:`remyxai.agent_matrix`, because this
+# used to be a third hand-kept copy of that data (after the action's own
+# registry and the engine's MODEL_PROVIDERS) and it drifted exactly as you
+# would expect the hand-edited copy to: it had z.ai defaulting to `glm-5.2`
+# long after the action moved to `glm-5.3`, and it never learned `openai`,
+# `openrouter` or `custom` at all.
 #
-# Adding a new backend here + wiring the same name in the outrider action's
-# `provider` case-switch is the complete change to add support — no
-# per-vendor CLI flags added by convention (existing --anthropic-key /
-# --zai-key are preserved for backward compat).
-# ``base_url`` is what makes a backend PROXIED: its key goes in
-# ANTHROPIC_AUTH_TOKEN with ANTHROPIC_BASE_URL pointing here, rather than in
-# ANTHROPIC_API_KEY (native). ``model_prefixes`` is how a per-stage
-# ``--drafter-model`` / ``--refiner-model`` names its backend without a separate
-# provider flag — the whole reason `kimi-k3` used to be treated as an Anthropic
-# model, rendered against ANTHROPIC_API_KEY, and died on its first run.
-_BACKEND_REGISTRY: dict = {
+# What stays here is *policy this CLI chooses*, which the matrix has no
+# opinion about:
+#
+#   default_model           what to render when the caller names none, for a
+#                           provider the matrix has no default for
+#   default_claude_timeout  per-provider wall-clock budget for the generated
+#                           workflow — a slower backend needs a bigger one
+#   model_prefixes          how a bare ``--drafter-model`` / ``--refiner-model``
+#                           names its provider without a separate flag
+#
+# The keys also bound which providers the **two-tier local install** supports.
+# That path rewrites an Anthropic-Messages workflow template in place (model,
+# Bearer auth, base URL), so it is Claude-Code-only by construction; the wider
+# provider set the matrix knows is reachable through `provider:` on a normal
+# install, not through here.
+_STAGE_POLICY: dict = {
     "anthropic": {
-        "secret_env": "ANTHROPIC_API_KEY",
         "default_model": "claude-opus-4-8",
         "default_claude_timeout": "900",
-        "display_name": "Anthropic",
-        "base_url": None,
         "model_prefixes": ("claude",),
     },
     "zai": {
-        "secret_env": "ZAI_API_KEY",
-        "default_model": "glm-5.2",
-        # glm-5.2's thinking mode adds per-turn latency similar to Kimi's
-        # kimi-k3; bumped from the historical 900s default to give the
-        # coding session enough headroom before hitting claude-timeout.
+        # GLM's thinking mode adds per-turn latency similar to Kimi's; bumped
+        # from the historical 900s to give the coding session enough headroom
+        # before hitting the timeout.
         "default_claude_timeout": "3600",
-        "display_name": "z.ai (GLM)",
-        "base_url": "https://api.z.ai/api/anthropic",
         "model_prefixes": ("glm",),
     },
     "moonshot": {
-        "secret_env": "MOONSHOT_API_KEY",
-        "default_model": "kimi-k3",
-        # Kimi's thinking-mode kimi-k3 runs slower per turn than Anthropic
-        # Opus; the bumped default matches the recommended value in the
-        # outrider action's docs/backends.md table.
+        # Kimi's thinking mode runs slower per turn than Anthropic Opus; the
+        # bumped default matches the action's own docs/backends.md table.
         "default_claude_timeout": "3600",
-        "display_name": "Moonshot (Kimi)",
-        "base_url": "https://api.moonshot.ai/anthropic",
         "model_prefixes": ("kimi", "moonshot"),
     },
 }
+
+
+def _build_backend_registry() -> dict:
+    """Join this CLI's policy onto the action's published provider facts.
+
+    ``base_url`` is what makes a provider PROXIED: its key goes in
+    ANTHROPIC_AUTH_TOKEN with ANTHROPIC_BASE_URL pointing at it, rather than
+    in ANTHROPIC_API_KEY (native). That distinction now comes from the matrix
+    rather than from a hand-maintained field.
+    """
+    registry = {}
+    for provider, policy in _STAGE_POLICY.items():
+        if agent_matrix.provider_info(provider) is None:
+            raise RuntimeError(
+                f"the vendored agent matrix has no provider {provider!r}, "
+                f"which this CLI's two-tier install depends on. Refresh it: "
+                f"python scripts/sync_agent_matrix.py"
+            )
+        registry[provider] = dict(
+            policy,
+            secret_env=agent_matrix.secret_env("claude", provider),
+            base_url=agent_matrix.endpoint("claude", provider) or None,
+            display_name=agent_matrix.provider_display_name(provider),
+            # Prefer the action's own default so the two cannot disagree
+            # about what `--provider zai` with no `--model` actually runs.
+            default_model=(
+                agent_matrix.default_model("claude", provider)
+                or policy.get("default_model", "")
+            ),
+        )
+    return registry
+
+
+_BACKEND_REGISTRY: dict = _build_backend_registry()
 
 # The provider a stage falls back to when no model override names one — it's
 # what the @v1 two-tier templates ship with.

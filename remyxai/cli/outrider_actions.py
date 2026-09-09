@@ -34,6 +34,7 @@ from typing import NamedTuple, Optional
 
 import click
 
+from remyxai import agent_matrix
 from remyxai.api import BASE_URL, DEFAULT_BASE_URL
 from remyxai.api.interests import (
     get_interest,
@@ -103,11 +104,27 @@ PROVIDER_INTEGRATION_IDS = {
 # option that implements it (commands.outrider_init).
 BYOK_FLAG = "--github-secrets-only"
 
+#: Provider → the GitHub Actions secret the action reads for it.
+#:
+#: Derived from the action's published matrix rather than hand-listed, which
+#: is what let `moonshot` be accepted by `init` and rejected by
+#: `set-provider-secret` once already. Providers that supply their own
+#: endpoint (`custom`) have no conventional secret name and are excluded.
+#:
+#: This is deliberately WIDER than :data:`MODEL_PROVIDERS` above. That one
+#: mirrors the *engine's* integration ids — including the `claude_code` id,
+#: which is an agent name in a model-provider registry — and can only grow
+#: when the engine learns a provider. Setting a repo secret is a plain `gh`
+#: operation with no engine involvement, so it is bounded by what the
+#: *action* understands, not by what the engine can provision.
 _PROVIDER_SECRET_NAMES = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "zai": "ZAI_API_KEY",
-    "moonshot": "MOONSHOT_API_KEY",
+    provider: agent_matrix.provider_info(provider)["secret_env"]
+    for provider in agent_matrix.known_providers()
+    if agent_matrix.provider_info(provider)["secret_env"]
 }
+
+#: The `--provider` choice list for `set-provider-secret`.
+SECRET_PROVIDER_CHOICES = sorted(_PROVIDER_SECRET_NAMES)
 
 INSTALL_POLL_INTERVAL = 5     # seconds between App-install checks
 INSTALL_POLL_TIMEOUT = 300    # stop waiting for the browser install after 5 min
@@ -1538,14 +1555,12 @@ def handle_set_provider_secret(repo, provider, key_from):
     length before sending so a clearly-truncated value is rejected at
     the CLI boundary rather than after a wasted workflow run.
 
-    Provider name → secret name map (``_PROVIDER_SECRET_NAMES``):
-
-    - ``anthropic`` → ``ANTHROPIC_API_KEY``
-    - ``zai`` → ``ZAI_API_KEY``
-    - ``moonshot`` → ``MOONSHOT_API_KEY``
+    The provider → secret name map comes from the action's published
+    matrix (``_PROVIDER_SECRET_NAMES``), so every provider the action
+    understands is settable here — the convention is ``<VENDOR>_API_KEY``.
     """
     if provider not in _PROVIDER_SECRET_NAMES:
-        choices = ", ".join(sorted(_PROVIDER_SECRET_NAMES))
+        choices = ", ".join(SECRET_PROVIDER_CHOICES)
         raise click.UsageError(
             f"--provider must be one of: {choices} (got {provider!r})"
         )
@@ -1599,7 +1614,10 @@ def handle_set_provider_secret(repo, provider, key_from):
     click.secho(
         f"✓ Set {secret_name} on {resolved_repo}.", fg="green", bold=True,
     )
-    default_model = {"zai": "glm-5.2", "moonshot": "kimi-k3"}.get(provider)
+    # From the matrix, not a literal: the inline copy that used to live here
+    # still said `glm-5.2` long after the action moved to `glm-5.3`, so the
+    # command's own "next, run this" hint printed a stale model id.
+    default_model = agent_matrix.default_model("claude", provider)
     if default_model:
         click.echo(
             "  Next: `remyxai outrider trigger --repo "

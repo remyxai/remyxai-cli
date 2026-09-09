@@ -53,20 +53,54 @@ def test_moonshot_has_a_secret_name():
     assert _PROVIDER_SECRET_NAMES["moonshot"] == "MOONSHOT_API_KEY"
 
 
-def test_secret_names_match_the_setup_local_backend_registry():
-    """The two provider tables must not drift.
+def test_secret_names_agree_with_the_setup_local_backend_registry():
+    """The two provider tables must not disagree.
 
     `init` accepting `moonshot` while `set-provider-secret` rejected it is
-    exactly what drift looks like from the outside.
+    exactly what drift looks like from the outside. Both now derive from the
+    action's published matrix, so they cannot — but the two are no longer the
+    same *set*: `_BACKEND_REGISTRY` bounds the two-tier local install, which
+    rewrites an Anthropic-Messages template in place and so is Claude-Code
+    only, while a repo secret can be set for anything the action understands.
+    Subset, and agreeing wherever they overlap, is the real invariant.
     """
     from remyxai.cli.outrider_local import _BACKEND_REGISTRY
 
-    assert {name: cfg["secret_env"] for name, cfg in _BACKEND_REGISTRY.items()} \
-        == _PROVIDER_SECRET_NAMES
+    two_tier = {name: cfg["secret_env"] for name, cfg in _BACKEND_REGISTRY.items()}
+    assert set(two_tier) <= set(_PROVIDER_SECRET_NAMES)
+    for provider, secret in two_tier.items():
+        assert _PROVIDER_SECRET_NAMES[provider] == secret
 
 
-def test_provider_choices_cover_every_known_provider():
-    assert set(outrider_actions.PROVIDER_CHOICES) == set(_PROVIDER_SECRET_NAMES)
+def test_every_engine_provider_has_a_secret_name():
+    """Engine-facing and action-facing provider sets, and why they differ.
+
+    `PROVIDER_CHOICES` mirrors the engine's `MODEL_PROVIDERS` — integration
+    ids the integrations API can actually provision — so it grows only when
+    the *engine* learns a provider. `_PROVIDER_SECRET_NAMES` is bounded by
+    what the *action* understands, which is already wider (it has `openai`
+    and `openrouter`).
+
+    So this is a subset check, not an equality one. The direction that would
+    be a bug is a provider the engine can provision but the CLI cannot name a
+    secret for — that would leave `init` unable to push its key.
+    """
+    assert set(outrider_actions.PROVIDER_CHOICES) <= set(_PROVIDER_SECRET_NAMES)
+
+
+def test_set_provider_secret_accepts_every_provider_the_action_knows():
+    """The point of widening: `--provider openai` used to be rejected by a
+    click.Choice bound to the engine's three providers, even though setting
+    that secret is a plain `gh` operation with no engine involvement."""
+    for provider in ("openai", "openrouter"):
+        assert provider in outrider_actions.SECRET_PROVIDER_CHOICES
+        assert _PROVIDER_SECRET_NAMES[provider]
+
+
+def test_a_caller_supplied_endpoint_has_no_conventional_secret():
+    """`custom` means the caller brings their own endpoint and auth, so there
+    is no `<VENDOR>_API_KEY` to offer them."""
+    assert "custom" not in _PROVIDER_SECRET_NAMES
 
 
 # ─── tier provider extraction ───────────────────────────────────────────────
