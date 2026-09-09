@@ -336,4 +336,8 @@ def test_the_only_claude_mentions_left_are_true_of_claude_specifically():
             "was wrong in three ways",  # the cocoindex post-mortem comment
             'a Claude',                 # …continued
             "(Claude Code), not",       # the dropped-agent warning
+            "executed Claude Code",     # the ignored-agent report
+            "runs Claude Code",         # …and its user-facing line
+            "renders a Claude-Code",    # what an engine without the axis does
+            "what every engine renders",
         )), f"unclassified Claude mention: {line}"

@@ -323,6 +323,7 @@ def provision_action(
     force: bool = False,
     sealed_provider_secrets: Optional[list] = None,
     api_key: Optional[str] = None,
+    agent: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Provision the Outrider recommendation Action on a repo, server-side
@@ -370,6 +371,14 @@ def provision_action(
         payload["force"] = True
     if model_provider:
         payload["model_provider"] = model_provider
+    if agent:
+        # The agent axis. The engine renders the workflow, so this only takes
+        # effect once it understands the field — and its provision endpoint is
+        # a permissive `data.get()` passthrough, so an engine that predates
+        # the axis accepts this and silently ignores it. The CLI verifies the
+        # rendered workflow afterwards rather than trusting the 200; see
+        # `_verify_provisioned_agent` in cli/outrider_actions.py.
+        payload["agent"] = agent
     if repo_url:
         payload["repo_url"] = repo_url
     if branch:
