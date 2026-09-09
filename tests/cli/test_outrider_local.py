@@ -1098,3 +1098,57 @@ def test_every_agent_can_be_installed_with_some_backend():
             if agent_matrix.first_error(agent_matrix.check_pair(agent, b)) is None
         ]
         assert usable, f"no --backend value is valid for --agent {agent}"
+
+
+def test_the_plan_names_the_agent(monkeypatch):
+    """The plan is the last thing read before something is written to a repo.
+
+    It showed the provider but not the agent, so the axis a user had just
+    set was invisible on exactly the install that changed it.
+    """
+    result = _install("codex", "openai", monkeypatch)
+    assert "- Agent:     codex (Codex)" in result.output
+
+
+def test_a_single_file_install_can_pin_its_model(monkeypatch):
+    """`--model` had no equivalent on setup-local, so a single-file install
+    could not name a model at all — while the pair check told the user to
+    "pass --model with an id OpenAI lists", advice there was no flag for.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "x-test-key-long-enough-value")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "codex", "--backend", "openai",
+        "--model", "gpt-5.4-mini", "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "default: 'gpt-5.4-mini'" in result.output
+    # And naming one silences the no-default-model advisory.
+    assert "has no default model" not in result.output
+
+
+def test_no_model_on_a_provider_without_a_default_still_advises(monkeypatch):
+    """The advisory is real — Codex would send its own default id, which the
+    provider may not serve — so it must survive, now that it is actionable."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "x-test-key-long-enough-value")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "codex", "--backend", "openai", "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "has no default model" in result.output
+    assert "--model" in result.output

@@ -923,6 +923,15 @@ def outrider_init(
                   "add an agent credential with `gh secret set CODEX_API_KEY` "
                   "or `BACKBOARD_API_KEY`."
               ))
+@click.option("--model", "model", default=None,
+              help=(
+                  "Model id the install runs by default, from the provider "
+                  "you picked (e.g. gpt-5.4-mini on openai, glm-5.3 on zai). "
+                  "Becomes the `model` workflow_dispatch input's default, so "
+                  "a dispatch can still override it. Empty lets the agent "
+                  "choose its own default, which some providers do not "
+                  "recognise — the install says so when that applies."
+              ))
 @click.option("--backend", "backend",
               type=click.Choice(TWO_TIER_BACKEND_CHOICES),
               default="anthropic", show_default=True,
@@ -953,7 +962,7 @@ def outrider_init(
 def outrider_setup_local(
     repo, interest_id, auto_interest, mode, anthropic_key,
     no_cron, no_cocoindex, two_tier, drafter_model, refiner_model, refine_model,
-    zai_key, agent, backend, bulk_repos, pace_s, dry_run, skip_confirm,
+    zai_key, agent, backend, model, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider WITHOUT the Remyx GitHub App.
@@ -1005,6 +1014,7 @@ def outrider_setup_local(
                 zai_key=zai_key,
                 backend=backend,
                 agent=agent,
+                model=model or "",
             ),
             pace_s=pace_s,
         )
@@ -1026,6 +1036,7 @@ def outrider_setup_local(
         zai_key=zai_key,
         backend=backend,
         agent=agent,
+        model=model or "",
     )
 
 
