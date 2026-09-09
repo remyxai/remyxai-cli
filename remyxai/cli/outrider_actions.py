@@ -835,7 +835,7 @@ def handle_outrider_init(
     single_tier=False, provider=None, model=None,
     drafter_provider=None, drafter_model=None,
     refiner_provider=None, refiner_model=None,
-    force=False, skip_key_check=False, byok=False,
+    force=False, skip_key_check=False, byok=False, agent=None,
 ):
     """Set up Outrider on a repo via the Remyx engine. Called from
     commands.outrider_init.
@@ -1020,6 +1020,10 @@ def handle_outrider_init(
         model_provider=PROVIDER_INTEGRATION_IDS.get(key_plan.preferred),
         sealed_provider_secrets=sealed_payload,
         api_key=api_key,
+        # Staged ahead of the engine. See the verification below: an engine
+        # that predates the agent axis accepts this and ignores it, so a 200
+        # is not evidence the axis took effect.
+        agent=agent,
     )
     task_id = resp.get("task_id")
     if not task_id:
@@ -1054,6 +1058,7 @@ def handle_outrider_init(
         )
     else:
         click.echo("  Next: merge the setup PR to activate Outrider.")
+    _report_provisioned_agent(resolved_repo, agent)
     for provider, secret_name, _ in key_plan.sealed:
         click.echo(
             f"  Repo secret {secret_name}: set from your sealed key "
@@ -1188,6 +1193,90 @@ def _gh_default_branch(repo: str) -> Optional[str]:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
     return out or None
+
+
+def _report_provisioned_agent(repo: str, agent: Optional[str]) -> None:
+    """Say what agent the install will actually run, and flag a mismatch.
+
+    `init` provisions server-side, so whether the agent axis took effect is
+    the engine's answer, not this CLI's. The engine's provision endpoint is a
+    permissive `data.get()` passthrough, so one that predates the axis
+    returns 200 and renders a Claude-Code workflow — reporting success on the
+    strength of that 200 would tell a user they had provisioned Codex while
+    every run quietly executed Claude Code.
+
+    So the rendered workflow is read back. Unreadable (private-repo
+    permissions, or a setup PR not merged yet) says nothing rather than
+    guessing.
+    """
+    resolved = agent_matrix.resolve_agent(agent)
+    if resolved == agent_matrix.DEFAULT_AGENT:
+        # Claude Code is what every engine renders, axis or not.
+        return
+
+    honored = _provisioned_workflow_honors_agent(repo)
+    if honored is True:
+        click.echo(
+            f"  Agent: {agent_matrix.agent_display_name(resolved)} "
+            f"({resolved})"
+        )
+        return
+    if honored is None:
+        click.secho(
+            f"  ⚠ could not read the provisioned workflow to confirm "
+            f"agent={resolved} took effect. Check it once the setup PR is "
+            f"merged:\n"
+            f"      remyxai outrider trigger --repo {repo} --mode smoke "
+            f"--agent {resolved}",
+            fg="yellow",
+        )
+        return
+    click.secho(
+        f"  ✗ this engine does not support the agent axis yet, so "
+        f"agent={resolved} was ignored and the install runs Claude Code.\n"
+        f"    Nothing downstream will flag this — the runs will look fine and "
+        f"be the wrong agent.\n"
+        f"    To run {agent_matrix.agent_display_name(resolved)} today, "
+        f"install with your own gh instead:\n"
+        f"      remyxai outrider setup-local --repo {repo} --agent {resolved}",
+        fg="red", bold=True,
+    )
+
+
+def _provisioned_workflow_honors_agent(repo: str) -> Optional[bool]:
+    """Does the engine-rendered workflow actually route the `agent` input?
+
+    Returns True/False, or None when it cannot be read (a private-repo
+    permission gap, a not-yet-merged setup PR) — in which case say nothing
+    rather than guess.
+
+    This exists because the engine's provision endpoint is a permissive
+    `data.get()` passthrough: an engine that predates the agent axis accepts
+    `agent` in the payload, returns 200, and renders a Claude-Code workflow.
+    Trusting that 200 would tell a user they had provisioned Codex while
+    every run quietly executed Claude Code — the same class of silent
+    substitution as an undeclared dispatch input being dropped, and worth
+    the extra round trip to rule out.
+    """
+    try:
+        raw = subprocess.check_output(
+            ["gh", "api",
+             f"/repos/{repo}/contents/.github/workflows/{WORKFLOW_FILENAME}",
+             "--jq", ".content"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    if not raw:
+        return None
+    try:
+        body = base64.b64decode(raw).decode("utf-8", "replace")
+    except (ValueError, TypeError):
+        return None
+    # The action only receives the axis if the workflow forwards it. A
+    # workflow that merely *declares* an `agent` input without passing it on
+    # is the same silent no-op, so look for the forwarding.
+    return "agent:" in body and "inputs.agent" in body
 
 
 def _outrider_workflow_exists(repo: str) -> bool:

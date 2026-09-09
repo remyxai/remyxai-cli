@@ -624,6 +624,19 @@ def outrider():
                   "Install the plain single-file workflow instead of the "
                   "default two-tier drafter/refiner setup."
               ))
+@click.option("--agent", "agent",
+              type=click.Choice(AGENT_CHOICES),
+              default=None,
+              help=(
+                  "Which coding-agent CLI runs the implementation "
+                  "(claude, codex, backboard). A separate axis from "
+                  "--provider, which picks the model. NOTE: `init` "
+                  "provisions server-side, so this only takes effect on an "
+                  "engine that supports the agent axis — the CLI reads the "
+                  "provisioned workflow back and tells you if it was "
+                  "ignored. `outrider setup-local --agent` works today on "
+                  "any engine."
+              ))
 @click.option("--provider", "provider",
               type=click.Choice(PROVIDER_CHOICES),
               default=None,
@@ -709,7 +722,7 @@ def outrider():
               ))
 def outrider_init(
     repo, interest_id, auto_interest, mode, anthropic_key,
-    single_tier, provider, model,
+    single_tier, agent, provider, model,
     drafter_provider, drafter_model, refiner_provider, refiner_model,
     force, skip_key_check, byok,
     no_wait, bulk_repos, pace_s, dry_run, skip_confirm,
@@ -811,6 +824,7 @@ def outrider_init(
                 force=force,
                 skip_key_check=skip_key_check,
                 byok=byok,
+                agent=agent,
                 skip_confirm=skip_confirm,
                 dry_run=dry_run,
                 no_wait=no_wait,
@@ -834,6 +848,7 @@ def outrider_init(
         force=force,
         skip_key_check=skip_key_check,
         byok=byok,
+        agent=agent,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
         no_wait=no_wait,
