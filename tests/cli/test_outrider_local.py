@@ -1152,3 +1152,57 @@ def test_no_model_on_a_provider_without_a_default_still_advises(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "has no default model" in result.output
     assert "--model" in result.output
+
+
+def test_naming_only_the_agent_is_enough(monkeypatch):
+    """Picking an agent must not force you to also know its provider.
+
+    `--backend` defaulted to `anthropic` whatever the agent was, so
+    `--agent codex` on its own was *rejected* — the pair check correctly
+    refused codex+anthropic, on a configuration the user never chose. An
+    unset backend now follows the agent to its own vendor.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BACKBOARD_API_KEY"):
+        monkeypatch.setenv(name, "x-test-key-long-enough-value")
+
+    for agent, expected_secret in [
+        ("claude", "ANTHROPIC_API_KEY"),
+        ("codex", "OPENAI_API_KEY"),
+        ("backboard", "BACKBOARD_API_KEY"),
+    ]:
+        result = CliRunner().invoke(cli, [
+            "outrider", "setup-local", "--repo", "owner/name",
+            "--interest", "00000000-0000-0000-0000-000000000000",
+            "--agent", agent, "--dry-run", "--yes",
+        ])
+        assert result.exit_code == 0, f"{agent}: {result.output}"
+        secrets_line = next(
+            l for l in result.output.splitlines() if "- Secrets:" in l
+        )
+        assert expected_secret in secrets_line, f"{agent}: {secrets_line}"
+
+
+def test_the_derived_default_keeps_claude_on_anthropic():
+    """Backwards compatibility: an unset agent means claude, whose own vendor
+    is anthropic — the same default `--backend` always had."""
+    from remyxai import agent_matrix
+
+    assert agent_matrix.home_provider("") == "anthropic"
+    assert agent_matrix.home_provider("claude") == "anthropic"
+
+
+def test_the_home_provider_is_derived_from_the_vendor_default_endpoint():
+    """Not a hand-kept table: exactly one provider serves each family at an
+    empty base URL, which is what "that family's own vendor" means. Adding a
+    family or vendor needs no edit."""
+    from remyxai import agent_matrix
+
+    assert agent_matrix.home_provider("codex") == "openai"
+    # A native router has no family to match; it reaches its own catalogue.
+    assert agent_matrix.home_provider("backboard") == ""

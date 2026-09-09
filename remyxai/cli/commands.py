@@ -934,7 +934,7 @@ def outrider_init(
               ))
 @click.option("--backend", "backend",
               type=click.Choice(TWO_TIER_BACKEND_CHOICES),
-              default="anthropic", show_default=True,
+              default=None,
               help=(
                   "Which Anthropic-Messages-compat backend the single-file "
                   "setup routes at by default. Selects the workflow_dispatch "

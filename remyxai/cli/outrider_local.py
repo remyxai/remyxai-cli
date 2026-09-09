@@ -908,7 +908,7 @@ def handle_outrider_setup_local(
     anthropic_key, skip_confirm, dry_run, no_cron=False, no_cocoindex=False,
     two_tier=False,
     drafter_model=None, refiner_model=None, refine_model=None, zai_key=None,
-    backend="anthropic",
+    backend=None,
     agent="",
     model="",
 ):
@@ -942,6 +942,17 @@ def handle_outrider_setup_local(
     if interest_id and auto_interest:
         raise click.UsageError(
             "--interest and --auto-interest are mutually exclusive."
+        )
+
+    # An unset `--backend` follows the *agent*, not a fixed vendor. It used to
+    # default to `anthropic` whatever the agent was, so `--agent codex` on its
+    # own was rejected — picking an agent forced you to also know which
+    # provider pairs with it, which is exactly the kind of rule nobody should
+    # have to carry. Derived before validation so both install paths see a
+    # concrete value.
+    if not backend:
+        backend = (
+            agent_matrix.home_provider(agent) or _TEMPLATE_DEFAULT_PROVIDER
         )
 
     if backend not in _BACKEND_REGISTRY:
