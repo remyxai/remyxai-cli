@@ -869,3 +869,47 @@ def test_an_unrecognized_bare_model_still_only_warns(monkeypatch):
     ])
     assert result.exit_code == 0, result.output
     assert "can't tell which backend" in result.output
+
+
+# ─── cocoindex is the action's job, not the template's ─────────────────────
+
+
+def test_the_template_does_not_install_cocoindex_itself():
+    """It used to, and that was wrong three ways once a run could use an
+    agent other than Claude Code:
+
+    * it symlinked into `~/.claude/skills` unconditionally, so a Codex or
+      R-CLI run cloned a skill into a directory that agent never reads;
+    * the ENVIRONMENTS.md it wrote told *every* agent that `ccc` was "a
+      Claude Code skill", a route two of the three agents do not have;
+    * the action installs cocoindex itself when `enable-cocoindex` is true
+      (its default), so each install did the ~1GB install twice and wrote
+      two different ENVIRONMENTS.md files.
+    """
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "pipx install" not in wf
+    assert "~/.claude/skills" not in wf
+    assert "ENVIRONMENTS.md" not in wf
+
+
+def test_no_cocoindex_forwards_the_action_input():
+    """`--no-cocoindex` now turns the action's own install off rather than
+    omitting steps the template no longer has."""
+    on = outrider_local._render_local_workflow("uuid", no_cocoindex=False)
+    off = outrider_local._render_local_workflow("uuid", no_cocoindex=True)
+    assert "enable-cocoindex: 'true'" in on
+    assert "enable-cocoindex: 'false'" in off
+
+
+def test_the_generated_workflow_says_nothing_claude_specific():
+    """A workflow that can dispatch three agents must not describe one.
+
+    The `provider` input called itself "which model provider to route
+    Claude Code at", which reads as though the input does not apply when
+    `agent` is codex or backboard. It applies to whichever agent is
+    selected.
+    """
+    for agent in ("claude", "codex", "backboard"):
+        wf = outrider_local._render_local_workflow("uuid", agent=agent)
+        assert "route Claude Code at" not in wf
+        assert "Claude Code skill" not in wf

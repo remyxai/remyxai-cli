@@ -862,11 +862,12 @@ def outrider_init(
               ))
 @click.option("--no-cocoindex", "no_cocoindex", is_flag=True, default=False,
               help=(
-                  "Omit the cocoindex-code install + ENVIRONMENTS.md write "
-                  "steps from the workflow. Default is to include them — "
-                  "AST-based code search grounds the selection agent's "
-                  "call-site claims on real paths. See outrider's "
-                  "docs/environments.md for the rationale."
+                  "Turn off cocoindex-code AST search for this install "
+                  "(sets the action's `enable-cocoindex` to false). Default "
+                  "is on — AST-based code search grounds the selection "
+                  "agent's call-site claims on real paths. The action "
+                  "installs it where the selected agent can reach it. See "
+                  "outrider's docs/environments.md for the rationale."
               ))
 @click.option("--two-tier", "two_tier", is_flag=True, default=False,
               help=(
