@@ -85,6 +85,17 @@ remyxai outrider setup-local --repo owner/name --interest <uuid> --no-cron
 
 The schedule block is rendered commented-out (not removed entirely), so re-enabling later means uncommenting three lines — no need to re-run setup-local.
 
+### Picking an agent
+
+`setup-local` takes `--agent` alongside `--backend`: the first picks the coding-agent CLI, the second the model behind it.
+
+```bash
+remyxai outrider setup-local --repo owner/name --auto-interest \
+  --agent codex --backend anthropic
+```
+
+The generated workflow declares `agent` as a dispatch input too, so a single install can switch agents per run — provided that agent's credential is on the repo (`CODEX_API_KEY`, `BACKBOARD_API_KEY`). `--agent` is not yet available on `outrider init`; that path is provisioned server-side and needs the engine to grow the same axis.
+
 Engine-side `outrider init --no-cron` is not yet supported; for now, prefer `setup-local --no-cron` if you need that knob.
 
 
