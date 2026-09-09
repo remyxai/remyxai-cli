@@ -407,6 +407,7 @@ def _render_local_workflow(
     no_cocoindex: bool = False,
     backend: str = "anthropic",
     agent: str = "",
+    model: str = "",
 ) -> str:
     # No github-token input → the action uses this repo's built-in
     # GITHUB_TOKEN, which setup-local authorizes to open PRs.
@@ -455,6 +456,7 @@ def _render_local_workflow(
             f"unknown backend {backend!r}; must be one of: "
             f"{sorted(_BACKEND_REGISTRY)}"
         )
+    model = (model or "").strip()
     agent = agent_matrix.resolve_agent(agent)
     if agent not in agent_matrix.known_agents():
         raise ValueError(
@@ -522,9 +524,9 @@ on:
         options:
 {agent_options}
       model:
-        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.3, kimi-k3). Use the id your provider lists. Empty = provider default.'
+        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.3, kimi-k3). Use the id your provider lists. Empty = the agent picks its own default.'
         required: false
-        default: ''
+        default: '{model}'
       base-url:
         description: 'Optional Anthropic-compatible endpoint (self-hosted model, litellm proxy, vLLM Anthropic shim, on-prem gateway). Overrides the per-provider default when set. Empty = provider default.'
         required: false
@@ -908,6 +910,7 @@ def handle_outrider_setup_local(
     drafter_model=None, refiner_model=None, refine_model=None, zai_key=None,
     backend="anthropic",
     agent="",
+    model="",
 ):
     """Self-provision Outrider with the user's own gh token (no Remyx App).
 
@@ -1066,7 +1069,7 @@ def handle_outrider_setup_local(
         # ANTHROPIC_API_KEY — the wrong token for a Codex run — and leave a
         # workflow whose own defaults could never succeed, so every scheduled
         # run failed on a config the CLI had just told the user was fine.
-        for problem in agent_matrix.check_pair(agent, backend):
+        for problem in agent_matrix.check_pair(agent, backend, model):
             if problem.is_error:
                 raise click.UsageError(
                     problem.message.replace("--agent", "--agent")
@@ -1131,6 +1134,15 @@ def handle_outrider_setup_local(
         )
     else:
         secrets_line = f"REMYX_API_KEY, {backend_secret_env}"
+        # Always name the agent, and name the provider whenever it is not
+        # the default. The plan is the last thing a user reads before
+        # something is written to their repo, and the agent is the axis they
+        # most likely just set — showing only the provider made the headline
+        # choice invisible on exactly the install that changed it.
+        click.echo(
+            f"  - Agent:     {agent_matrix.resolve_agent(agent)} "
+            f"({agent_matrix.agent_display_name(agent)})"
+        )
         if backend != "anthropic":
             click.echo(f"  - Backend:   {backend} ({_BACKEND_REGISTRY[backend]['display_name']})")
     click.echo(f"  - Secrets:   {secrets_line}")
@@ -1156,7 +1168,7 @@ def handle_outrider_setup_local(
             click.echo("--- rendered outrider.yml (workflow_dispatch only) ---")
             click.echo(_render_local_workflow(
                 "<interest-id>", no_cron=True, no_cocoindex=no_cocoindex,
-                agent=agent,
+                agent=agent, model=model,
             ))
             click.echo("\n--- rendered outrider-daily.yml (drafter) ---")
             click.echo(_render_drafter_workflow("<interest-id>", model=drafter_model))
@@ -1168,7 +1180,7 @@ def handle_outrider_setup_local(
             click.echo("--- rendered workflow ---")
             click.echo(_render_local_workflow(
                 "<interest-id>", no_cron=no_cron, no_cocoindex=no_cocoindex,
-                backend=backend, agent=agent,
+                backend=backend, agent=agent, model=model,
             ))
         click.secho("dry-run: no changes made.", fg="yellow")
         return
@@ -1218,6 +1230,7 @@ def handle_outrider_setup_local(
             no_cocoindex=no_cocoindex,
             backend=backend,
             agent=agent,
+            model=model,
         )
         _gh_put_file(resolved_repo, branch_name, WORKFLOW_PATH, workflow,
                      "Install Outrider (self-provisioned via remyxai CLI)")
