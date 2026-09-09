@@ -338,11 +338,36 @@ _COCOINDEX_STEPS_BLOCK = """      # Attach cocoindex-code as a Claude Code skill
 """
 
 
+def _workflow_secret_names() -> list:
+    """Every secret the generated workflow should reference, from the matrix.
+
+    Each provider's conventional ``<VENDOR>_API_KEY`` plus each agent's own
+    credential — Backboard's key is both its agent credential and its
+    model-routing credential, so it arrives via the agent side. REMYX_API_KEY
+    leads because the run cannot fetch a recommendation without it.
+
+    Derived rather than listed so a provider added to the action reaches new
+    installs without a CLI release. The generated workflow references them
+    all; the action reads only the ones its `agent` / `provider` select.
+    """
+    names = ["REMYX_API_KEY"]
+    for provider in agent_matrix.known_providers():
+        secret = agent_matrix.provider_info(provider)["secret_env"]
+        if secret and secret not in names:
+            names.append(secret)
+    for agent in agent_matrix.known_agents():
+        key = agent_matrix.agent_info(agent)["key_env"]
+        if key and key not in names:
+            names.append(key)
+    return names
+
+
 def _render_local_workflow(
     interest_id: str,
     no_cron: bool = False,
     no_cocoindex: bool = False,
     backend: str = "anthropic",
+    agent: str = "",
 ) -> str:
     # No github-token input → the action uses this repo's built-in
     # GITHUB_TOKEN, which setup-local authorizes to open PRs.
@@ -357,20 +382,57 @@ def _render_local_workflow(
     # the recommended default.
     #
     # ``backend`` picks the default value of the workflow_dispatch ``provider``
-    # input (anthropic / zai / moonshot) and the corresponding default
-    # ``claude-timeout``. Per-dispatch switching stays available: users can
-    # dispatch with a different ``provider`` as long as the corresponding
-    # secret is set on the repo (setup-local writes only the selected backend's
-    # secret; add others via ``gh secret set`` for cross-backend dispatch).
+    # input and the baked ``claude-timeout``. ``agent`` picks the default of
+    # the ``agent`` input — which coding-agent CLI does the work. Per-dispatch
+    # switching stays available on both axes, as long as the corresponding
+    # secret is set on the repo (setup-local writes only the selected
+    # backend's secret; add others with
+    # ``remyxai outrider set-provider-secret`` for cross-backend dispatch).
+    #
+    # INPUT BUDGET: workflow_dispatch accepts at most 10 top-level inputs, and
+    # GitHub rejects the whole workflow past that ("maximum number of inputs
+    # for workflow_dispatch event is 10"). This template shipped 11 — the nine
+    # the action's own canonical outrider.yml declares, plus ``search-method``
+    # and ``claude-timeout`` — so every setup-local install wrote a workflow
+    # GitHub would not run. Adding ``agent`` needed two slots back:
+    #
+    #   search-method   dropped. The canonical template never declared it
+    #                   either, so ``trigger --search-method`` already warned
+    #                   on App-provisioned installs; this only makes the two
+    #                   templates agree. ``--pin-arxiv`` covers the manual
+    #                   case.
+    #   claude-timeout  no longer an input; baked into ``with:`` from the
+    #                   provider's own default. The install still gets the
+    #                   right budget — which matters more than ever, since
+    #                   neither Codex nor R-CLI has a round cap and the
+    #                   timeout is their only spend bound — you just cannot
+    #                   override it per dispatch. ``trigger --claude-timeout``
+    #                   warns via the undeclared-input path.
+    #
+    # The result is canonical parity plus the new axis, which is a better
+    # place to be than the ad-hoc set it had drifted into.
     if backend not in _BACKEND_REGISTRY:
         raise ValueError(
             f"unknown backend {backend!r}; must be one of: "
             f"{sorted(_BACKEND_REGISTRY)}"
         )
+    agent = agent_matrix.resolve_agent(agent)
+    if agent not in agent_matrix.known_agents():
+        raise ValueError(
+            f"unknown agent {agent!r}; must be one of: "
+            f"{agent_matrix.known_agents()}"
+        )
     reg = _BACKEND_REGISTRY[backend]
     default_timeout = reg["default_claude_timeout"]
     provider_options = "\n".join(
         f"          - {name}" for name in _BACKEND_REGISTRY
+    )
+    agent_options = "\n".join(
+        f"          - {name}" for name in agent_matrix.known_agents()
+    )
+    secret_env_block = "\n".join(
+        f"          {name}: ${{{{ secrets.{name} }}}}"
+        for name in _workflow_secret_names()
     )
 
     if no_cron:
@@ -401,16 +463,19 @@ on:
         default: '{backend}'
         options:
 {provider_options}
+      agent:
+        description: 'Which coding-agent CLI runs the implementation. A separate axis from provider, which picks the model. Not every pair is valid — the action rejects an impossible one up front and names the agent that does serve your provider.'
+        type: choice
+        required: false
+        default: '{agent}'
+        options:
+{agent_options}
       model:
-        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.2, kimi-k3). Empty = provider default.'
+        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.3, kimi-k3). Use the id your provider lists. Empty = provider default.'
         required: false
         default: ''
       base-url:
         description: 'Optional Anthropic-compatible endpoint (self-hosted model, litellm proxy, vLLM Anthropic shim, on-prem gateway). Overrides the per-provider default when set. Empty = provider default.'
-        required: false
-        default: ''
-      search-method:
-        description: 'Optional free-text method query. Runs an engine search and implements the top hit.'
         required: false
         default: ''
       pin-arxiv:
@@ -441,10 +506,6 @@ on:
         description: 'Enable the multi-pass staged-synthesis flow (the refiner sets true).'
         required: false
         default: 'false'
-      claude-timeout:
-        description: 'Wall-clock seconds for the Claude Code agent calls. Threads through every phase (selection, deep-search, preflight, audit, implementation, self-review).'
-        required: false
-        default: '{default_timeout}'
 
 jobs:
   recommend:
@@ -457,29 +518,32 @@ jobs:
     steps:
 {cocoindex_steps}      - uses: remyxai/outrider@v1
         env:
-          # Every registered backend's secret is referenced. The action's
-          # Configure step (outrider v1.7.29+) reads only the one matching
-          # `provider`; the rest are ignored. Missing secrets evaluate to
-          # empty strings, and the Configure step fails clean with a specific
-          # ::error:: if the caller selects a provider whose secret isn't set.
-          REMYX_API_KEY: ${{{{ secrets.REMYX_API_KEY }}}}
-          ANTHROPIC_API_KEY: ${{{{ secrets.ANTHROPIC_API_KEY }}}}
-          ZAI_API_KEY: ${{{{ secrets.ZAI_API_KEY }}}}
-          MOONSHOT_API_KEY: ${{{{ secrets.MOONSHOT_API_KEY }}}}
+          # Every provider secret and every agent credential the action might
+          # read, generated from its published matrix so a provider added
+          # there reaches new installs without a CLI release. The Configure
+          # step reads only the ones its `agent` / `provider` select; the rest
+          # are ignored. A missing secret evaluates to an empty string and
+          # that step fails clean with a specific ::error:: naming the one it
+          # needed.
+{secret_env_block}
         with:
           interest-id: {interest_id}
           # Minimum days between recommendation PRs. '0' lets every run open
           # a PR; raise (e.g. '7') to cap cadence.
           rate-limit-days: '0'
-          # Forwarded from workflow_dispatch inputs so manual `gh workflow
-          # run` dispatches can pin a paper, switch backends per-dispatch,
-          # extend the implementation timeout, etc.
+          # Forwarded from workflow_dispatch inputs so a manual `gh workflow
+          # run` (or `remyxai outrider trigger`) can pin a paper and switch
+          # either backend axis per-dispatch.
+          agent: ${{{{ inputs.agent }}}}
           provider: ${{{{ inputs.provider }}}}
           model: ${{{{ inputs.model }}}}
           model-base-url: ${{{{ inputs.base-url }}}}
-          search-method: ${{{{ inputs.search-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
-          claude-timeout: ${{{{ inputs.claude-timeout }}}}
+          # Baked rather than dispatched: workflow_dispatch allows only 10
+          # inputs and this one lost the tie-break (see the input-budget note
+          # in _render_local_workflow). Neither Codex nor R-CLI has a round
+          # cap, so this is their only spend bound — keep it tight.
+          claude-timeout: '{default_timeout}'
           # Forwarded so outrider-weekly-refine.yml can dispatch a refinement
           # run (mode + start-from-ref + lead-content + staged-synthesis).
           mode: ${{{{ inputs.mode }}}}

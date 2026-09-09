@@ -67,30 +67,28 @@ def test_render_forwards_provider_model_and_base_url_to_action():
     assert "model-base-url: ${{ inputs.base-url }}" in wf
 
 
-def test_render_backend_moonshot_selects_moonshot_default_and_timeout():
-    """--backend moonshot sets the workflow_dispatch provider default to
-    'moonshot' AND uses moonshot's bumped claude-timeout (3600s per the
-    registry) as the input default."""
+def test_render_backend_moonshot_bakes_moonshots_timeout():
+    """--backend moonshot sets the dispatch `provider` default to 'moonshot'
+    and bakes moonshot's longer timeout (kimi thinking mode) into `with:`."""
     wf = outrider_local._render_local_workflow("uuid", backend="moonshot")
     assert "default: 'moonshot'" in wf
-    # Registry-declared timeout for moonshot (kimi-k3 thinking mode).
-    assert "default: '3600'" in wf
+    assert "claude-timeout: '3600'" in wf
 
 
 def test_render_backend_zai_uses_bumped_timeout():
-    """--backend zai also gets the bumped 3600s timeout — glm-5.2's
-    thinking mode adds per-turn latency similar to Kimi's."""
+    """--backend zai also gets the bumped 3600s — GLM's thinking mode adds
+    per-turn latency similar to Kimi's."""
     wf = outrider_local._render_local_workflow("uuid", backend="zai")
     assert "default: 'zai'" in wf
-    assert "default: '3600'" in wf
+    assert "claude-timeout: '3600'" in wf
 
 
 def test_render_backend_anthropic_uses_default_timeout_900():
-    """--backend anthropic keeps the historical 900s timeout default —
-    Opus is fast enough per-turn that the default doesn't need bumping."""
+    """--backend anthropic keeps the historical 900s — Opus is fast enough
+    per-turn that the default doesn't need bumping."""
     wf = outrider_local._render_local_workflow("uuid", backend="anthropic")
     assert "default: 'anthropic'" in wf
-    assert "default: '900'" in wf
+    assert "claude-timeout: '900'" in wf
 
 
 def test_render_unknown_backend_raises():
@@ -100,29 +98,81 @@ def test_render_unknown_backend_raises():
         outrider_local._render_local_workflow("uuid", backend="bedrock")
 
 
-def test_render_declares_workflow_dispatch_inputs():
-    """The generated workflow exposes search-method / pin-arxiv /
-    claude-timeout as workflow_dispatch inputs so `remyxai outrider
-    trigger` and manual `gh workflow run -f ...` can forward them
-    without the workflow rejecting them as 'not a permitted key'."""
+def test_render_stays_within_githubs_workflow_dispatch_input_ceiling():
+    """workflow_dispatch accepts at most 10 inputs, and GitHub rejects the
+    whole workflow past that — "maximum number of inputs for
+    workflow_dispatch event is 10".
+
+    This template shipped **11**, so every setup-local install wrote a
+    workflow GitHub would not run. Nothing caught it: the tests asserted that
+    particular inputs were present, never how many there were in total. This
+    is the guard that would have.
+    """
+    yaml = pytest.importorskip("yaml")
+    for backend in ("anthropic", "zai", "moonshot"):
+        for agent in ("claude", "codex", "backboard"):
+            wf = yaml.safe_load(
+                outrider_local._render_local_workflow(
+                    "uuid", backend=backend, agent=agent
+                )
+            )
+            on = wf.get("on") or wf.get(True)
+            inputs = (on["workflow_dispatch"] or {}).get("inputs") or {}
+            assert len(inputs) <= 10, (
+                f"{agent}/{backend} declares {len(inputs)} inputs "
+                f"({sorted(inputs)}); GitHub's ceiling is 10 and it rejects "
+                f"the workflow outright past it"
+            )
+
+
+def test_render_declares_the_inputs_the_action_canonically_declares():
+    """Parity with the action's own outrider.yml, plus the agent axis.
+
+    Two inputs were dropped to make room for `agent` inside the ceiling:
+    `search-method`, which the canonical template never declared either, and
+    `claude-timeout`, now baked into `with:` from the provider's default.
+    """
     wf = outrider_local._render_local_workflow("uuid")
-    # Inputs block under workflow_dispatch.
     assert "workflow_dispatch:" in wf
     assert "    inputs:" in wf
-    # Each declared input is present.
-    for name in ("search-method:", "pin-arxiv:", "claude-timeout:"):
-        assert name in wf, f"missing input declaration: {name}"
-    # claude-timeout's default matches the action's documented 900s.
-    assert "default: '900'" in wf
+    for name in ("agent", "provider", "model", "base-url", "pin-arxiv",
+                 "mode", "publish", "start-from-ref", "lead-content",
+                 "staged-synthesis"):
+        assert f"      {name}:" in wf, f"missing input declaration: {name}"
 
 
-def test_render_forwards_workflow_dispatch_inputs_to_action():
-    """Each declared workflow_dispatch input is forwarded into the
-    action's `with:` block via ${{ inputs.<name> }}."""
-    wf = outrider_local._render_local_workflow("uuid")
-    for name in ("search-method", "pin-arxiv", "claude-timeout"):
-        assert f"{name}: ${{{{ inputs.{name} }}}}" in wf, (
-            f"missing forwarding for {name}"
+def test_render_does_not_declare_the_two_inputs_it_traded_away():
+    """Pinned deliberately: re-adding either silently breaks the workflow by
+    pushing it over the ceiling, and the failure looks like a YAML problem
+    rather than a budget one."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow("uuid")
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    declared = set(((on["workflow_dispatch"] or {}).get("inputs") or {}))
+    # Parsed, not substring-matched: the baked `with:` line is indented
+    # deeper than an input declaration, so a naive `"      claude-timeout:"
+    # not in text` matches it and fails for the wrong reason.
+    assert "search-method" not in declared
+    assert "claude-timeout" not in declared
+    # But the budget is still honored — just not overridable per dispatch.
+    assert "claude-timeout: '900'" in text
+
+
+def test_render_forwards_every_declared_input_to_the_action():
+    """Every declared input reaches the action's `with:` block, or dispatching
+    it does nothing and looks like the action ignoring the value."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow("uuid")
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    declared = list(((on["workflow_dispatch"] or {}).get("inputs") or {}))
+    # `base-url` is the one rename: the action's input is `model-base-url`.
+    forwarded = {"base-url": "model-base-url"}
+    for name in declared:
+        target = forwarded.get(name, name)
+        assert f"{target}: ${{{{ inputs.{name} }}}}" in text, (
+            f"input {name} is declared but never forwarded"
         )
 
 
@@ -647,3 +697,58 @@ class TestTwoTierSecretCollection:
         self._run(monkeypatch, drafter_model="kimi-k3", dry_run=True)
         out = capsys.readouterr().out
         assert "MOONSHOT_API_KEY (will prompt)" in out
+
+
+# ─── the agent axis in the generated workflow ──────────────────────────────
+
+
+def test_render_declares_the_agent_axis_with_every_known_agent():
+    """`agent` is a choice input listing what the vendored matrix knows, so a
+    new agent in the action reaches new installs without a CLI release."""
+    from remyxai import agent_matrix
+
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "      agent:" in wf
+    for name in agent_matrix.known_agents():
+        assert f"          - {name}" in wf, f"agent {name} not offered"
+    assert "agent: ${{ inputs.agent }}" in wf
+
+
+def test_render_defaults_the_agent_input_to_the_selected_agent():
+    for agent in ("claude", "codex", "backboard"):
+        wf = outrider_local._render_local_workflow("uuid", agent=agent)
+        assert f"default: '{agent}'" in wf
+
+
+def test_render_defaults_to_claude_when_no_agent_is_named():
+    """Empty means Claude Code and always will — the pinned compatibility
+    guarantee that keeps existing installs on the path they have today."""
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "default: 'claude'" in wf
+
+
+def test_render_unknown_agent_raises():
+    with pytest.raises(ValueError, match="unknown agent"):
+        outrider_local._render_local_workflow("uuid", agent="gemini-cli")
+
+
+def test_render_references_every_credential_the_action_might_read():
+    """Generated from the matrix, not hand-listed.
+
+    The env block used to name three provider secrets literally, so a
+    `codex` or `backboard` run on a setup-local install would have found no
+    credential at all — the action would fail its preflight with the key it
+    needed missing, on a workflow the CLI itself wrote.
+    """
+    from remyxai import agent_matrix
+
+    wf = outrider_local._render_local_workflow("uuid")
+    for agent in agent_matrix.known_agents():
+        key = agent_matrix.agent_info(agent)["key_env"]
+        assert f"{key}: ${{{{ secrets.{key} }}}}" in wf, f"missing {key}"
+    for provider in agent_matrix.known_providers():
+        secret = agent_matrix.provider_info(provider)["secret_env"]
+        if secret:
+            assert f"{secret}: ${{{{ secrets.{secret} }}}}" in wf, (
+                f"missing {secret}"
+            )
