@@ -1203,14 +1203,19 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
       remyxai outrider trigger --repo owner/name \\
         --search-method "riemannian preconditioning LoRA optimizer"
 
-      # Route at z.ai's GLM-5.2 for this dispatch (Anthropic is the
+      # Route at z.ai's GLM for this dispatch (Anthropic is the
       # workflow's default; this overrides for one run)
       remyxai outrider trigger --repo owner/name \\
-        --pin-arxiv 2402.02347v3 --provider zai --model glm-5.2
+        --pin-arxiv 2402.02347v3 --provider zai --model glm-5.3
+
+      # Switch the coding agent too — a separate axis from the model
+      remyxai outrider trigger --repo owner/name \\
+        --pin-arxiv 2402.02347v3 \\
+        --agent codex --provider openai --model gpt-5.4-mini
 
       # Bump the implementation timeout for a very large monorepo
       remyxai outrider trigger --repo owner/name \\
-        --pin-arxiv 2402.02347v3 --claude-timeout 1800
+        --pin-arxiv 2402.02347v3 --agent-timeout 1800
 
       # Refine an existing branch: build on it, with a gap analysis as
       # leading context (the second-pass / promotion shape)
