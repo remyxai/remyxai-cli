@@ -293,7 +293,7 @@ def test_trigger_forwards_claude_timeout_when_set(monkeypatch, capsys):
     # input values are strings on the wire.
     assert captured["inputs"]["claude-timeout"] == "1800"
     out = capsys.readouterr().out
-    assert "claude-timeout: 1800s" in out
+    assert "agent-timeout:  1800s" in out
 
 
 def test_trigger_omits_claude_timeout_when_unset(monkeypatch):
@@ -355,7 +355,7 @@ def test_cli_claude_timeout_flag_accepted_and_dispatched(monkeypatch):
     ])
     assert result.exit_code == 0, result.output
     assert captured["inputs"]["claude-timeout"] == "2700"
-    assert "claude-timeout: 2700s" in result.output
+    assert "agent-timeout:  2700s" in result.output
 
 
 def test_cli_claude_timeout_must_be_integer():
@@ -944,3 +944,127 @@ def test_cli_publish_rejects_unknown_value(monkeypatch):
     ])
     assert result.exit_code != 0
     assert "publish" in result.output.lower()
+
+
+# ─── the agent axis ────────────────────────────────────────────────────────
+
+
+def _capture_dispatch(monkeypatch):
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return True, ""
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+    return captured
+
+
+def test_agent_reaches_the_dispatch_inputs(monkeypatch):
+    captured = _capture_dispatch(monkeypatch)
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "2410.20305v2",
+        "--agent", "codex", "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["agent"] == "codex"
+    assert "agent:          codex" in result.output
+
+
+def test_agent_timeout_and_claude_timeout_are_the_same_flag(monkeypatch):
+    """`--claude-timeout` is the old name and has to keep working — it is in
+    the surface customers already scripted against."""
+    for flag in ("--agent-timeout", "--claude-timeout"):
+        captured = _capture_dispatch(monkeypatch)
+        result = CliRunner().invoke(cli, [
+            "outrider", "trigger", "--repo", "owner/name",
+            "--pin-arxiv", "2410.20305v2", flag, "1800",
+        ])
+        assert result.exit_code == 0, result.output
+        assert captured["inputs"]["claude-timeout"] == "1800", flag
+
+
+def test_the_timeout_goes_on_the_wire_under_its_old_name(monkeypatch):
+    """Deliberate: the action accepts both spellings, but a workflow
+    installed before the rename declares only `claude-timeout`, and the 422
+    self-heal drops an undeclared input and retries. Sending `agent-timeout`
+    would make the flag silently do nothing on every existing install.
+    """
+    captured = _capture_dispatch(monkeypatch)
+    CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent-timeout", "1200",
+    ])
+    assert "claude-timeout" in captured["inputs"]
+    assert "agent-timeout" not in captured["inputs"]
+
+
+def test_an_impossible_pair_is_rejected_before_dispatching(monkeypatch):
+    """The whole point of client-side validation: no round trip, and the
+    error names the agent that does serve the provider."""
+    captured = _capture_dispatch(monkeypatch)
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "codex", "--provider", "anthropic",
+    ])
+    assert result.exit_code != 0
+    assert "does not serve" in result.output
+    assert "--agent claude" in result.output
+    assert "inputs" not in captured, "must not dispatch on a rejected pair"
+
+
+def test_an_unknown_agent_warns_but_still_dispatches(monkeypatch):
+    """This CLI ships independently of the action, so an agent it has not
+    heard of may well be one the installed action knows."""
+    captured = _capture_dispatch(monkeypatch)
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "some-future-agent",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "does not know agent" in result.output
+    assert captured["inputs"]["agent"] == "some-future-agent"
+
+
+def test_a_dropped_agent_input_is_called_out_loudly(monkeypatch):
+    """The 422 self-heal drops undeclared inputs and retries, so dispatching
+    `--agent codex` at a workflow installed before that input existed runs
+    Claude Code instead — silently, having spent real tokens. The generic
+    "doesn't declare" warning undersells that, because every other dropped
+    input falls back to something close to what was asked for.
+    """
+    calls = []
+
+    def fake_dispatch(repo, branch, inputs):
+        calls.append(inputs)
+        if len(calls) == 1:
+            return False, 'HTTP 422: Unexpected inputs provided: ["agent"]'
+        return True, ""
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "codex",
+    ])
+    assert result.exit_code == 0, result.output
+    # It retried without `agent` …
+    assert "agent" not in calls[1]
+    # … and said so in terms that name the actual consequence.
+    assert "not 'codex'" in result.output
+    assert "Claude Code" in result.output

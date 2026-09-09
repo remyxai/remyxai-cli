@@ -292,6 +292,15 @@ def _build_backend_registry() -> dict:
 
 _BACKEND_REGISTRY: dict = _build_backend_registry()
 
+#: The `--backend` choice list for the local install path.
+#:
+#: Bounded by what `_render_local_workflow` can actually render, NOT by every
+#: provider serving anthropic-messages. Deriving it from the matrix instead
+#: put `openrouter` on the flag — click accepted it and the renderer then
+#: raised ValueError, because there is no `_STAGE_POLICY` row to render from.
+#: A choice list has to promise exactly what the code behind it supports.
+TWO_TIER_BACKEND_CHOICES = sorted(_BACKEND_REGISTRY)
+
 # The provider a stage falls back to when no model override names one — it's
 # what the @v1 two-tier templates ship with.
 _TEMPLATE_DEFAULT_PROVIDER = "anthropic"
@@ -611,6 +620,22 @@ _GAP_ZAI_AUTH = '"Authorization": f"Bearer {os.environ[\'ZAI_API_KEY\']}",'
 _GAP_ENV_ANCHOR = "REPO: ${{ github.repository }}"
 
 
+def is_gateway_model(model: str) -> bool:
+    """True for a namespaced ``<vendor>/<model>`` id.
+
+    A gateway addresses models this way — OpenRouter's ``z-ai/glm-5.3``,
+    R-CLI's ``<provider>/<model>`` — and the namespace names the vendor
+    *behind* the gateway, not the endpoint the request goes to. So the id
+    cannot be resolved to a direct provider by inspection: ``z-ai/glm-5.3``
+    is served by OpenRouter, not by z.ai.
+
+    That distinction matters because the prefix heuristic below reads the
+    leading characters, and would have matched nothing for every namespaced
+    id, quietly handing them to the template default.
+    """
+    return "/" in (model or "")
+
+
 def infer_provider(model: str) -> Optional[str]:
     """Backend a model name belongs to, or ``None`` when nothing matches.
 
@@ -619,9 +644,13 @@ def infer_provider(model: str) -> Optional[str]:
     honest answer for an unrecognized name — the caller warns rather than
     silently assuming Anthropic, which is how a Kimi drafter ended up rendered
     against ANTHROPIC_API_KEY and dead on arrival.
+
+    A namespaced gateway id is ``None`` for a stronger reason than "no prefix
+    matched": there is no direct provider to infer at all. See
+    :func:`is_gateway_model`.
     """
     name = (model or "").strip().lower()
-    if not name:
+    if not name or is_gateway_model(name):
         return None
     for provider, cfg in _BACKEND_REGISTRY.items():
         if any(name.startswith(p) for p in cfg["model_prefixes"]):
@@ -818,6 +847,7 @@ def handle_outrider_setup_local(
     two_tier=False,
     drafter_model=None, refiner_model=None, refine_model=None, zai_key=None,
     backend="anthropic",
+    agent="",
 ):
     """Self-provision Outrider with the user's own gh token (no Remyx App).
 
@@ -874,10 +904,30 @@ def handle_outrider_setup_local(
     unknown_models = _unknown_stage_models(
         drafter_model, refiner_model, refine_model,
     )
-    if unknown_models:
+    # Split by how sure we are. A namespaced id is *certainly* unroutable
+    # here, so it fails; a merely unrecognized one might be fine, so it
+    # warns. Same rule the agent/provider check uses: only a durable fact
+    # gets to hard-fail.
+    gateway_models = [m for m in unknown_models if is_gateway_model(m)]
+    unrecognized = [m for m in unknown_models if not is_gateway_model(m)]
+    if gateway_models:
+        raise click.UsageError(
+            f"a two-tier stage cannot use a gateway model id: "
+            f"{', '.join(gateway_models)}. Each stage rewrites an "
+            f"Anthropic-Messages workflow in place and routes at one "
+            f"vendor's endpoint, so a `<vendor>/<model>` id — OpenRouter's "
+            f"`z-ai/glm-5.3`, R-CLI's `<provider>/<model>` — has no endpoint "
+            f"to resolve to. Name a direct provider's model instead ("
+            + ", ".join(
+                f"{c['default_model']}" for c in _BACKEND_REGISTRY.values()
+                if c.get("default_model")
+            )
+            + "), or install single-file and set `provider` per dispatch."
+        )
+    if unrecognized:
         click.secho(
             f"⚠ can't tell which backend these models belong to: "
-            f"{', '.join(unknown_models)}. Treating them as "
+            f"{', '.join(unrecognized)}. Treating them as "
             f"{_TEMPLATE_DEFAULT_PROVIDER} — if that's wrong the stage will "
             f"fail auth on its first run. Known prefixes: "
             + "; ".join(
@@ -1020,6 +1070,7 @@ def handle_outrider_setup_local(
             click.echo("--- rendered outrider.yml (workflow_dispatch only) ---")
             click.echo(_render_local_workflow(
                 "<interest-id>", no_cron=True, no_cocoindex=no_cocoindex,
+                agent=agent,
             ))
             click.echo("\n--- rendered outrider-daily.yml (drafter) ---")
             click.echo(_render_drafter_workflow("<interest-id>", model=drafter_model))
@@ -1031,7 +1082,7 @@ def handle_outrider_setup_local(
             click.echo("--- rendered workflow ---")
             click.echo(_render_local_workflow(
                 "<interest-id>", no_cron=no_cron, no_cocoindex=no_cocoindex,
-                backend=backend,
+                backend=backend, agent=agent,
             ))
         click.secho("dry-run: no changes made.", fg="yellow")
         return
@@ -1080,6 +1131,7 @@ def handle_outrider_setup_local(
             no_cron=(no_cron or two_tier),
             no_cocoindex=no_cocoindex,
             backend=backend,
+            agent=agent,
         )
         _gh_put_file(resolved_repo, branch_name, WORKFLOW_PATH, workflow,
                      "Install Outrider (self-provisioned via remyxai CLI)")

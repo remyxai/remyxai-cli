@@ -26,6 +26,7 @@ from remyxai.cli.interest_actions import (
 )
 from remyxai.cli.outrider_actions import (
     PROVIDER_CHOICES,
+    AGENT_CHOICES,
     SECRET_PROVIDER_CHOICES,
     _parse_bulk_repos_tsv,
     _run_bulk,
@@ -33,7 +34,10 @@ from remyxai.cli.outrider_actions import (
     handle_outrider_trigger,
     handle_set_provider_secret,
 )
-from remyxai.cli.outrider_local import handle_outrider_setup_local
+from remyxai.cli.outrider_local import (
+    TWO_TIER_BACKEND_CHOICES,
+    handle_outrider_setup_local,
+)
 
 
 @click.group()
@@ -902,8 +906,21 @@ def outrider_init(
                   "secret. Only needed when a --*-model selects a GLM model; "
                   "falls back to $ZAI_API_KEY / $Z_AI_KEY, else prompts."
               ))
+@click.option("--agent", "agent",
+              type=click.Choice(AGENT_CHOICES),
+              default="claude", show_default=True,
+              help=(
+                  "Which coding-agent CLI the generated workflow runs by "
+                  "default. A separate axis from --backend, which picks the "
+                  "model. Sets the `agent` workflow_dispatch input's default; "
+                  "the workflow can still dispatch another agent at run time, "
+                  "provided that agent's credential is set on the repo. "
+                  "setup-local writes only the selected backend's secret — "
+                  "add an agent credential with `gh secret set CODEX_API_KEY` "
+                  "or `BACKBOARD_API_KEY`."
+              ))
 @click.option("--backend", "backend",
-              type=click.Choice(["anthropic", "zai", "moonshot"]),
+              type=click.Choice(TWO_TIER_BACKEND_CHOICES),
               default="anthropic", show_default=True,
               help=(
                   "Which Anthropic-Messages-compat backend the single-file "
@@ -932,7 +949,7 @@ def outrider_init(
 def outrider_setup_local(
     repo, interest_id, auto_interest, mode, anthropic_key,
     no_cron, no_cocoindex, two_tier, drafter_model, refiner_model, refine_model,
-    zai_key, backend, bulk_repos, pace_s, dry_run, skip_confirm,
+    zai_key, agent, backend, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider WITHOUT the Remyx GitHub App.
@@ -983,6 +1000,7 @@ def outrider_setup_local(
                 refine_model=refine_model,
                 zai_key=zai_key,
                 backend=backend,
+                agent=agent,
             ),
             pace_s=pace_s,
         )
@@ -1003,6 +1021,7 @@ def outrider_setup_local(
         refine_model=refine_model,
         zai_key=zai_key,
         backend=backend,
+        agent=agent,
     )
 
 
@@ -1034,13 +1053,27 @@ def outrider_setup_local(
 @click.option("--ref", "ref", default=None,
               help="Git ref to dispatch on. Defaults to the repo's default "
                    "branch.")
-@click.option("--claude-timeout", "claude_timeout", type=int, default=None,
+@click.option("--agent", "agent", default=None,
               help=(
-                  "Wall-clock seconds for the Claude Code agent calls "
-                  "on this dispatch (preflight + implementation share "
-                  "the budget). Default (unset) lets the action's own "
-                  "default apply (900s). Raise for very large monorepos "
-                  "or slower non-default providers."
+                  "Which coding-agent CLI runs the implementation on this "
+                  "dispatch (claude, codex, backboard). A separate axis from "
+                  "--provider, which picks the model. Unset keeps the "
+                  "workflow's own default. Not every agent/provider pair is "
+                  "valid; an impossible one is rejected here rather than "
+                  "after a dispatch round-trip. Requires the target workflow "
+                  "to declare an `agent` input — re-run `outrider init "
+                  "--force` (or setup-local) on installs predating it."
+              ))
+@click.option("--agent-timeout", "--claude-timeout", "agent_timeout",
+              type=int, default=None,
+              help=(
+                  "Wall-clock seconds for each agent phase on this dispatch "
+                  "(preflight + implementation share the budget). Unset lets "
+                  "the workflow's own default apply. Raise for very large "
+                  "monorepos or slower backends. Only Claude Code has a "
+                  "round cap, so on codex and backboard this is the ONLY "
+                  "spend bound — keep it tight. `--claude-timeout` is the "
+                  "old name for this flag and still works."
               ))
 @click.option("--provider", "provider", default=None,
               help=(
@@ -1130,7 +1163,7 @@ def outrider_setup_local(
                   "repo."
               ))
 def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
-                     claude_timeout, provider, model, base_url, mode,
+                     agent, agent_timeout, provider, model, base_url, mode,
                      publish, start_from_ref, lead_content,
                      lead_content_file, staged_synthesis,
                      test_integration_policy, fidelity_policy,
@@ -1199,7 +1232,8 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
         pin_arxiv=pin_arxiv,
         interest_id=interest_id,
         ref=ref,
-        claude_timeout=claude_timeout,
+        agent=agent,
+        agent_timeout=agent_timeout,
         provider=provider,
         model=model,
         base_url=base_url,

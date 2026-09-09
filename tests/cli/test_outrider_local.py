@@ -752,3 +752,120 @@ def test_render_references_every_credential_the_action_might_read():
             assert f"{secret}: ${{{{ secrets.{secret} }}}}" in wf, (
                 f"missing {secret}"
             )
+
+
+def test_every_backend_choice_actually_renders():
+    """A choice list must promise exactly what the code behind it supports.
+
+    Deriving `--backend` from the matrix (every provider serving
+    anthropic-messages) put `openrouter` on the flag: click accepted it and
+    the renderer then raised ValueError, because there is no `_STAGE_POLICY`
+    row to render from. Caught before it shipped, pinned here.
+    """
+    assert outrider_local.TWO_TIER_BACKEND_CHOICES
+    for backend in outrider_local.TWO_TIER_BACKEND_CHOICES:
+        outrider_local._render_local_workflow("uuid", backend=backend)
+
+
+def test_every_agent_choice_actually_renders():
+    from remyxai.cli import outrider_actions
+
+    assert outrider_actions.AGENT_CHOICES
+    for agent in outrider_actions.AGENT_CHOICES:
+        outrider_local._render_local_workflow("uuid", agent=agent)
+
+
+def test_setup_local_agent_flag_reaches_the_rendered_workflow(monkeypatch):
+    """`--agent codex` has to change the generated file, not just be accepted.
+
+    Worth an end-to-end assertion rather than trusting the plumbing: the
+    first cut of this wiring inserted `agent=agent` into the *bulk* call and
+    left the single-repo one without it. It parsed — the insert landed inside
+    a `dict(...)` where Python ignores indentation — and every test still
+    passed, because nothing checked that the flag reached the rendered file.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    # setup-local prompts for the Remyx key before it renders anything.
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "codex", "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "default: 'codex'" in result.output
+    assert "CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}" in result.output
+
+
+# ─── gateway model ids ─────────────────────────────────────────────────────
+
+
+def test_a_gateway_model_id_infers_no_direct_provider():
+    """`z-ai/glm-5.3` is served by OpenRouter, not by z.ai.
+
+    The prefix heuristic reads leading characters, so every namespaced id
+    matched nothing and fell through to the template default — meaning
+    `z-ai/glm-5.3` was treated as an Anthropic model and would have been
+    rendered against ANTHROPIC_API_KEY with no base URL. Exactly the
+    dead-on-arrival failure `infer_provider`'s docstring warns about, in a
+    shape the prefix table could not see.
+    """
+    assert outrider_local.is_gateway_model("z-ai/glm-5.3")
+    assert outrider_local.infer_provider("z-ai/glm-5.3") is None
+    # A bare id still resolves — the heuristic is unchanged for those.
+    assert outrider_local.infer_provider("glm-5.3") == "zai"
+
+
+def test_a_gateway_id_is_a_gateway_id_even_when_the_namespace_looks_direct():
+    """`anthropic/claude-3-haiku` is an OpenRouter id, not an Anthropic one.
+
+    Resolving it to `anthropic` would happen to pick the right *secret* and
+    the wrong *endpoint*, which is the worst kind of near-miss.
+    """
+    assert outrider_local.infer_provider("anthropic/claude-3-haiku") is None
+
+
+def test_a_two_tier_stage_rejects_a_gateway_model_id(monkeypatch):
+    """Certainly wrong, so it fails rather than warns — the install it would
+    produce cannot authenticate on its first run."""
+    import click
+    import pytest as _pytest
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--drafter-model", "z-ai/glm-5.3",
+        "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "cannot use a gateway model id" in result.output
+    assert "z-ai/glm-5.3" in result.output
+
+
+def test_an_unrecognized_bare_model_still_only_warns(monkeypatch):
+    """It might be fine — a new Anthropic model name, say — so proceeding
+    with a warning is the right call for these."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--drafter-model", "some-new-model-9",
+        "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "can't tell which backend" in result.output

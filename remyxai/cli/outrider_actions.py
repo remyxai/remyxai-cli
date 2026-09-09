@@ -126,6 +126,10 @@ _PROVIDER_SECRET_NAMES = {
 #: The `--provider` choice list for `set-provider-secret`.
 SECRET_PROVIDER_CHOICES = sorted(_PROVIDER_SECRET_NAMES)
 
+#: The `--agent` choice list. From the matrix, so a new agent in the action
+#: becomes selectable without a CLI release.
+AGENT_CHOICES = agent_matrix.known_agents()
+
 INSTALL_POLL_INTERVAL = 5     # seconds between App-install checks
 INSTALL_POLL_TIMEOUT = 300    # stop waiting for the browser install after 5 min
 PROVISION_POLL_INTERVAL = 3
@@ -1367,11 +1371,12 @@ def _resolve_lead_content(lead_content, lead_content_file):
 
 
 def handle_outrider_trigger(
-    repo, search_method, pin_arxiv, interest_id, ref, claude_timeout=None,
-    provider=None, model=None, base_url=None, mode=None, publish=None,
-    start_from_ref=None, lead_content=None, lead_content_file=None,
-    staged_synthesis=False, test_integration_policy=None,
-    fidelity_policy=None, wait_for_slot=False,
+    repo, search_method, pin_arxiv, interest_id, ref, agent_timeout=None,
+    agent=None, provider=None, model=None, base_url=None, mode=None,
+    publish=None, start_from_ref=None, lead_content=None,
+    lead_content_file=None, staged_synthesis=False,
+    test_integration_policy=None, fidelity_policy=None, wait_for_slot=False,
+    claude_timeout=None,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -1381,10 +1386,14 @@ def handle_outrider_trigger(
     have an Outrider workflow installed (set up via `remyxai outrider init`
     or `setup-local`).
 
-    ``claude_timeout`` (seconds) overrides the action's default 900s
-    implementation-call ceiling on a per-dispatch basis. Useful for very
-    large monorepos where the default trips before the agent completes
-    (especially when routing at slower non-Anthropic backends).
+    ``agent`` selects the coding-agent CLI (claude / codex / backboard) and
+    ``provider`` selects the model behind it — two independent axes. An
+    impossible pair is rejected before the dispatch; ``agent_timeout``
+    (seconds) overrides the per-phase ceiling. ``claude_timeout`` is the old
+    name for that argument and still works.
+
+    Only Claude Code has a round cap, so on the other agents the timeout is
+    the only bound on spend.
 
     The refinement inputs — ``mode``, ``publish``, ``start_from_ref``,
     ``lead_content``/``lead_content_file``, ``staged_synthesis``,
@@ -1398,11 +1407,26 @@ def handle_outrider_trigger(
         raise click.UsageError(
             "--search-method and --pin-arxiv are mutually exclusive."
         )
-    if claude_timeout is not None and claude_timeout < 60:
+    # `--claude-timeout` is the old name for `--agent-timeout`. Click maps
+    # both spellings onto one parameter, so this only matters for callers
+    # invoking the handler directly (the engine path, and the tests written
+    # before the rename).
+    if agent_timeout is None:
+        agent_timeout = claude_timeout
+    if agent_timeout is not None and agent_timeout < 60:
         raise click.UsageError(
-            "--claude-timeout must be at least 60 seconds (a tighter value "
+            "--agent-timeout must be at least 60 seconds (a tighter value "
             "trips before the agent can finish even a small task)."
         )
+
+    # Reject an impossible agent/provider pair here rather than after a
+    # dispatch round-trip. Only a durable fact hard-fails — see
+    # remyxai.agent_matrix on why an unrecognized value passes through with a
+    # warning instead.
+    for problem in agent_matrix.check_pair(agent or "", provider or "", model or ""):
+        if problem.is_error:
+            raise click.UsageError(problem.message)
+        click.secho(f"⚠ {problem.message}", fg="yellow")
     lead = _resolve_lead_content(lead_content, lead_content_file)
 
     # Repo resolution
@@ -1442,7 +1466,15 @@ def handle_outrider_trigger(
         # Forward as a string — workflow_dispatch input values are
         # always strings on the wire. The action's INPUT_CLAUDE_TIMEOUT
         # parser handles the int conversion (and validates it).
-        "claude-timeout": str(claude_timeout) if claude_timeout else "",
+        # Sent under the OLD name deliberately. The action accepts both
+        # `claude-timeout` and `agent-timeout`, but a workflow installed
+        # before the rename declares only `claude-timeout` — and the 422
+        # self-heal below drops an undeclared input and retries, so sending
+        # the new name would make `--agent-timeout` silently do nothing on
+        # every existing install. The old name works everywhere.
+        "claude-timeout": str(agent_timeout) if agent_timeout else "",
+        # Which coding-agent CLI runs the implementation.
+        "agent": agent or "",
         # The target workflow must declare `provider` + `model` as
         # workflow_dispatch inputs for these to take effect. The
         # current CLI-generated template does; older templates and
@@ -1494,8 +1526,10 @@ def handle_outrider_trigger(
         click.echo(f"  pin-arxiv:      {pin_arxiv!r}")
     if interest_id:
         click.echo(f"  interest:       {interest_id}")
-    if claude_timeout:
-        click.echo(f"  claude-timeout: {claude_timeout}s")
+    if agent:
+        click.echo(f"  agent:          {agent}")
+    if agent_timeout:
+        click.echo(f"  agent-timeout:  {agent_timeout}s")
     if mode:
         click.echo(f"  mode:           {mode}")
     if start_from_ref:
@@ -1526,6 +1560,20 @@ def handle_outrider_trigger(
             f"    remyxai outrider init --repo {resolved_repo} --force",
             fg="yellow",
         )
+        if "agent" in dropped:
+            # Worth saying separately and louder. Dropping `publish` falls
+            # back to a default that does roughly what you asked; dropping
+            # `agent` means the run is executing on a DIFFERENT coding agent
+            # than the one requested, spending real tokens to do it, and
+            # nothing downstream will look wrong — the run just quietly is
+            # not the experiment you thought you launched.
+            click.secho(
+                f"  → the run is now on the workflow's own agent "
+                f"(Claude Code), not {agent!r}. Nothing downstream will flag "
+                f"this. Re-provision before trusting the result:\n"
+                f"    remyxai outrider init --repo {resolved_repo} --force",
+                fg="red", bold=True,
+            )
 
     click.secho("✓ Dispatched.", fg="green", bold=True)
     url = _gh_latest_run_url(resolved_repo)
