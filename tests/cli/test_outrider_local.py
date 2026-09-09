@@ -732,26 +732,43 @@ def test_render_unknown_agent_raises():
         outrider_local._render_local_workflow("uuid", agent="gemini-cli")
 
 
-def test_render_references_every_credential_the_action_might_read():
+def test_render_references_every_caller_supplied_credential():
     """Generated from the matrix, not hand-listed.
 
     The env block used to name three provider secrets literally, so a
-    `codex` or `backboard` run on a setup-local install would have found no
-    credential at all — the action would fail its preflight with the key it
-    needed missing, on a workflow the CLI itself wrote.
+    `backboard` run on a setup-local install would have found no credential
+    at all — the action would fail its preflight with the key it needed
+    missing, on a workflow the CLI itself wrote.
     """
     from remyxai import agent_matrix
 
     wf = outrider_local._render_local_workflow("uuid")
-    for agent in agent_matrix.known_agents():
-        key = agent_matrix.agent_info(agent)["key_env"]
-        assert f"{key}: ${{{{ secrets.{key} }}}}" in wf, f"missing {key}"
     for provider in agent_matrix.known_providers():
         secret = agent_matrix.provider_info(provider)["secret_env"]
         if secret:
             assert f"{secret}: ${{{{ secrets.{secret} }}}}" in wf, (
                 f"missing {secret}"
             )
+    # A native router's key is caller-supplied — nothing derives it.
+    assert "BACKBOARD_API_KEY: ${{ secrets.BACKBOARD_API_KEY }}" in wf
+
+
+def test_render_does_not_declare_a_credential_the_action_derives():
+    """A step-level `env:` entry beats `$GITHUB_ENV`, so declaring a derived
+    credential with a secret the repo lacks sets it empty and shadows the
+    resolved value.
+
+    Found live. Referencing every matrix credential put
+    `CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}` in the block; the repo had
+    no such secret; and a `codex` + `openai` dispatch died with
+    "agent=codex requires CODEX_API_KEY in the caller's env block" one step
+    after Configure had logged `CODEX_API_KEY=(set)`.
+    """
+    wf = outrider_local._render_local_workflow("uuid", agent="codex")
+    assert "CODEX_API_KEY" not in wf, (
+        "CODEX_API_KEY is derived by the action's Configure step; declaring "
+        "it here shadows the resolved value with an empty string"
+    )
 
 
 def test_every_backend_choice_actually_renders():
@@ -799,7 +816,7 @@ def test_setup_local_agent_flag_reaches_the_rendered_workflow(monkeypatch):
     ])
     assert result.exit_code == 0, result.output
     assert "default: 'codex'" in result.output
-    assert "CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}" in result.output
+    assert "agent: ${{ inputs.agent }}" in result.output
 
 
 # ─── gateway model ids ─────────────────────────────────────────────────────

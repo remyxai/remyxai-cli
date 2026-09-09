@@ -347,6 +347,24 @@ def _workflow_secret_names() -> list:
         if secret and secret not in names:
             names.append(secret)
     for agent in agent_matrix.known_agents():
+        # ONLY a native router's key. Every other agent credential is
+        # *derived* by the action's Configure step, which resolves the
+        # provider's secret into the agent's key env and writes it to
+        # $GITHUB_ENV — and a step-level `env:` entry takes precedence over
+        # $GITHUB_ENV, so declaring one here with a secret the repo does not
+        # have sets it to the empty string and shadows the resolved value.
+        #
+        # That is not theoretical: referencing every credential put
+        # `CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}` in the block, the repo
+        # had no such secret, and a `codex` + `openai` run died with
+        # "agent=codex requires CODEX_API_KEY in the caller's env block" one
+        # step after Configure had logged `CODEX_API_KEY=(set)`.
+        #
+        # A native router is the exception because its key is genuinely
+        # caller-supplied — Backboard's is both the agent credential and the
+        # model-routing credential, so nothing derives it.
+        if not agent_matrix.is_native_router(agent):
+            continue
         key = agent_matrix.agent_info(agent)["key_env"]
         if key and key not in names:
             names.append(key)
