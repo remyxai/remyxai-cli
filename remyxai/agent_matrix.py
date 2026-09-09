@@ -180,6 +180,34 @@ def endpoint(agent: str, provider: str) -> str:
     return p_info["families"].get(a_info["api_family"], "")
 
 
+def home_provider(agent: str) -> str:
+    """The provider an agent reaches at its vendor's *own* endpoint.
+
+    Derived, not listed: exactly one provider serves each API family with an
+    empty base URL, which is what "this is that family's own vendor" means —
+    `anthropic` for anthropic-messages, `openai` for openai-responses. So it
+    is the natural default provider for an agent, and adding a family or a
+    vendor needs no edit here.
+
+    This exists because `--backend` used to default to `anthropic` whatever
+    the agent was, so `--agent codex` alone was rejected: picking an agent
+    forced you to also know which provider pairs with it. A native router
+    has no family to match, so it keeps whatever default the caller has —
+    it can reach anything its own catalogue lists.
+    """
+    info = agent_info(agent)
+    if info is None or is_native_router(agent):
+        return ""
+    family = info["api_family"]
+    for provider in known_providers():
+        p_info = provider_info(provider)
+        if p_info["caller_supplied_endpoint"]:
+            continue
+        if p_info["families"].get(family, None) == "":
+            return provider
+    return ""
+
+
 # ─── validation ────────────────────────────────────────────────────────────
 
 def check_pair(agent: str, provider: str, model: str = "") -> List[Problem]:
