@@ -10,7 +10,7 @@ Once [Outrider](https://github.com/remyxai/outrider) is installed on a repo, you
 
 Three modes of specificity, in ascending order of override:
 
-1. **Default (no pin)** — Remyx ranks candidates from the interest-scoped pool + Outrider's audit augments via agentic refine-queries; Claude Code picks the best implementation from the ranked pool.
+1. **Default (no pin)** — Remyx ranks candidates from the interest-scoped pool + Outrider's audit augments via agentic refine-queries; the coding agent picks the best implementation from the ranked pool.
 2. **`--search-method`** — overrides the ranked pool with an engine search on your query; implements the top hit.
 3. **`--pin-arxiv`** — implements the exact arxiv paper; bypasses ranking entirely.
 
@@ -48,7 +48,7 @@ Searches the engine's research-asset catalog for matches against a method or top
 remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3
 ```
 
-Implements exactly this paper. Bypasses the ranker's pool entirely — Remyx fetches the paper directly from its asset catalog and forwards it to Claude Code for implementation. Works even if the paper isn't in the repo's interest-scoped candidate pool.
+Implements exactly this paper. Bypasses the ranker's pool entirely — Remyx fetches the paper directly from its asset catalog and forwards it to the coding agent for implementation. Works even if the paper isn't in the repo's interest-scoped candidate pool.
 
 Use for:
 - Reproducible re-runs (same paper, same repo, deterministic paper input)

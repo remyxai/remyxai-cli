@@ -612,9 +612,12 @@ def outrider():
               ))
 @click.option("--anthropic-key", "anthropic_key", default=None,
               help=(
-                  "Anthropic API key to connect as the model provider "
-                  "(Claude Code). Falls back to $ANTHROPIC_API_KEY. Only used "
-                  "if one isn't already connected."
+                  "Anthropic API key to connect as the model provider. "
+                  "(The engine lists this integration as \"Claude Code\" — "
+                  "that is its name there, not an agent selection; the "
+                  "coding agent is a separate axis.) Falls back to "
+                  "$ANTHROPIC_API_KEY. Only used if one isn't already "
+                  "connected."
               ))
 @click.option("--single-tier", "single_tier", is_flag=True, default=False,
               help=(
@@ -625,8 +628,9 @@ def outrider():
               type=click.Choice(PROVIDER_CHOICES),
               default=None,
               help=(
-                  "Model provider for BOTH tiers: anthropic (Claude Code), "
-                  "zai (Z.ai), or moonshot (Moonshot AI). Defaults to your "
+                  "Model provider for BOTH tiers: anthropic, zai (Z.ai), "
+                  "or moonshot (Moonshot AI). This is the model axis — the "
+                  "coding agent is picked separately. Defaults to your "
                   "connected provider. Override a single tier with "
                   "--drafter-provider / --refiner-provider. Each tier needs a "
                   "key: connected at engine.remyx.ai/integrations, or in this "
@@ -725,8 +729,7 @@ def outrider_init(
     explores as fork branches, plus a weekly *refiner* that promotes the
     strongest draft to a ready-for-review PR (crons off — drive them with
     `remyxai outrider trigger` or your own dispatcher). Any provider works —
-    anthropic (Claude Code), zai (Z.ai), or moonshot (Moonshot AI), all on
-    equal footing. One `--provider` / `--model` applies to both tiers;
+    anthropic, zai (Z.ai), or moonshot (Moonshot AI), all on equal footing. One `--provider` / `--model` applies to both tiers;
     `--drafter-*` / `--refiner-*` tune a single tier; unset, a tier follows
     your connected provider. Pass `--single-tier` for the plain single-file
     workflow instead.
@@ -1078,8 +1081,10 @@ def outrider_setup_local(
               ))
 @click.option("--provider", "provider", default=None,
               help=(
-                  "Route Claude Code at a specific model provider for "
-                  "this dispatch (e.g. 'anthropic', 'zai'). Requires the "
+                  "Route the coding agent at a specific model backend "
+                  "for this dispatch (e.g. 'anthropic', 'openai', 'zai', "
+                  "'moonshot', 'openrouter'). A separate axis from "
+                  "--agent, which picks the agent CLI. Requires the "
                   "target workflow to declare a `provider` workflow_"
                   "dispatch input; if unset, the workflow's own default "
                   "applies."
@@ -1177,7 +1182,7 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
     \b
     - default (no pin): Remyx ranks candidates from the interest-scoped
       pool + Outrider's audit augments via agentic refine-queries;
-      Claude Code picks the best implementation from the ranked pool.
+      the coding agent picks the best implementation from the ranked pool.
     - --search-method: overrides the ranked pool with an engine search
       on the user-specified query; the top hit gets implemented.
     - --pin-arxiv: exact arxiv paper; bypasses the pool entirely and
@@ -1304,11 +1309,10 @@ def outrider_set_provider_secret(repo, provider, key_from):
         --key-from ~/moonshot-key
 
     The matching workflow_dispatch input on the repo's outrider.yml
-    routes a dispatch with `--provider zai --model glm-5.2` at the
-    configured z.ai endpoint; the workflow's "Configure provider auth"
-    step picks the right env var (ANTHROPIC_AUTH_TOKEN vs
-    ANTHROPIC_API_KEY) so Claude Code uses the right auth header
-    for the chosen provider.
+    routes a dispatch with `--provider zai --model glm-5.3` at the
+    configured z.ai endpoint; the action resolves the credential,
+    endpoint and auth header style for the (agent, provider) pair, so
+    the same secret works whichever agent the dispatch selects.
     """
     handle_set_provider_secret(repo=repo, provider=provider, key_from=key_from)
 

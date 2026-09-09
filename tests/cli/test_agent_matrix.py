@@ -270,3 +270,70 @@ def test_the_vendored_matrix_is_current_with_a_sibling_action_checkout():
         + ".\nRefresh it:\n"
         f"  python scripts/sync_agent_matrix.py --from {source}"
     )
+
+
+# ─── no surface may claim Claude-only behavior ─────────────────────────────
+
+
+def test_shared_command_help_does_not_claim_claude_only_behavior():
+    """`trigger`, `setup-local` and `set-provider-secret` all work with any
+    agent, so their help must not describe one.
+
+    These read as though the flag does not apply when `agent` is codex or
+    backboard, and they hid from an earlier sweep because the phrase sat on
+    a continuation line of a multi-line `help=(...)` string rather than
+    beside the `help=` itself.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    banned = (
+        "Route Claude Code",
+        "Claude Code picks",
+        "so Claude Code uses",
+        "route Claude Code at",
+        "Claude Code subprocess",
+    )
+    for command in ("trigger", "setup-local", "set-provider-secret"):
+        out = CliRunner().invoke(cli, ["outrider", command, "--help"]).output
+        for phrase in banned:
+            assert phrase not in out, (
+                f"`outrider {command} --help` still says {phrase!r}"
+            )
+
+
+def test_the_only_claude_mentions_left_are_true_of_claude_specifically():
+    """A blanket ban would be wrong — some statements about Claude Code are
+    simply true, and deleting them loses real information.
+
+    What survives, and why each is correct:
+
+    * the engine's `claude_code` integration id, which cannot be renamed
+      without a data migration on live installs;
+    * the two-tier local install, which rewrites an Anthropic-Messages
+      template in place and so is Claude-Code-only by construction;
+    * "only Claude Code has a round cap", which is the reason the timeout is
+      the sole spend bound on the other two agents.
+    """
+    import subprocess
+
+    out = subprocess.run(
+        ["grep", "-rn", "Claude", "--include=*.py", "remyxai/"],
+        capture_output=True, text=True, cwd=str(ROOT),
+    ).stdout
+    for line in out.splitlines():
+        if "_agent_matrix.py" in line:
+            continue          # generated; carries the vendor's own names
+        assert any(marker in line for marker in (
+            "claude_code",              # engine integration id
+            "Claude-Code-only",         # two-tier constraint
+            "Only Claude Code has",     # the round-cap fact
+            "Empty means Claude Code",  # the pinned default
+            "engine lists this integration",
+            "engine.remyx.ai/integrations",
+            "Any provider counts equally",
+            "was wrong in three ways",  # the cocoindex post-mortem comment
+            'a Claude',                 # …continued
+            "(Claude Code), not",       # the dropped-agent warning
+        )), f"unclassified Claude mention: {line}"
