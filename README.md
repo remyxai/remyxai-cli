@@ -23,31 +23,62 @@ the strongest draft into a ready-for-review PR (crons stay off — drive runs
 with `remyxai outrider trigger` or your own dispatcher). The Remyx GitHub App
 authors everything (`remyx-ai[bot]`).
 
-### Model providers
+### Agents and model providers
 
-Any provider works, all on equal footing — pick whichever you've connected:
+Two independent axes. `--agent` picks the coding-agent CLI that does the work;
+`--provider` picks the model behind it.
+
+| Agent | `--agent` value | Speaks |
+|---|---|---|
+| Claude Code | `claude` *(default)* | Anthropic Messages |
+| OpenAI Codex | `codex` | OpenAI Responses |
+| Backboard R-CLI | `backboard` | its own router |
 
 | Provider | `--provider` value | Example models |
 |---|---|---|
-| Claude Code (Anthropic) | `anthropic` | `claude-opus-4-8` |
-| Z.ai | `zai` | `glm-5.2` |
+| Anthropic | `anthropic` | `claude-opus-4-8` |
+| OpenAI | `openai` | `gpt-5.4-mini` |
+| Z.ai | `zai` | `glm-5.3` |
 | Moonshot AI | `moonshot` | `kimi-k3` |
+| OpenRouter | `openrouter` | `z-ai/glm-5.3` |
+
+Not every pair is valid — an agent speaks one API family and a provider serves
+one or more — so `trigger` rejects an impossible pair locally, before spending
+a dispatch, and names the agent that *does* serve your provider:
+
+```
+$ remyxai outrider trigger --agent codex --provider anthropic
+Error: agent=codex speaks openai-responses, which Anthropic does not serve.
+       Use --agent claude for this provider.
+```
+
+Leave `--agent` unset and nothing changes: existing installs keep the Claude
+Code path they have today. Both tables come from the action's published
+compatibility matrix, vendored into this package, so they cannot drift from
+what the action actually supports.
 
 Unset, each tier follows your **connected** provider — no vendor is assumed.
 One provider covers both tiers; tune per tier, or opt out of two-tier entirely:
 
 ```bash
-# Both tiers on one provider (any of the three)
+# Both tiers on one provider
 remyxai outrider init --repo your-org/your-repo --auto-interest --provider moonshot
 
 # Mix providers per tier (cheap drafter + capable refiner)
 remyxai outrider init --repo your-org/your-repo --auto-interest \
-  --drafter-provider zai --drafter-model glm-5.2 \
+  --drafter-provider zai --drafter-model glm-5.3 \
   --refiner-provider anthropic
 
 # Plain single-file workflow instead of two-tier
 remyxai outrider init --repo your-org/your-repo --auto-interest --single-tier
+
+# A non-default agent, per dispatch
+remyxai outrider trigger --repo your-org/your-repo \
+  --agent codex --provider openai --model gpt-5.4-mini
 ```
+
+`--agent` reaches `trigger` and `setup-local` today. On `init` it waits for the
+engine to grow an agent axis — that install path is provisioned server-side.
 
 | Flag | Applies to | Default |
 |---|---|---|

@@ -239,3 +239,34 @@ def test_endpoint_and_default_model_are_read_per_family():
     agents speak different API families."""
     assert am.endpoint("claude", "moonshot") != am.endpoint("codex", "moonshot")
     assert am.default_model("claude", "zai") == "glm-5.3"
+
+
+def test_the_vendored_matrix_is_current_with_a_sibling_action_checkout():
+    """Catches the vendored copy rotting against the action it came from.
+
+    `test_the_sync_script_round_trips_its_own_output` only proves the
+    generator is self-consistent — it would stay green on a matrix a year
+    out of date. This one compares against the real source when a checkout
+    is available, and skips when it is not, so it helps during development
+    without making the suite depend on a sibling clone.
+    """
+    from remyxai._agent_matrix import MATRIX
+
+    candidates = [
+        ROOT.parent / "outrider" / "docs" / "agent-matrix.json",
+        Path.home() / "outrider" / "docs" / "agent-matrix.json",
+    ]
+    source = next((p for p in candidates if p.exists()), None)
+    if source is None:
+        pytest.skip("no sibling remyxai/outrider checkout to compare against")
+
+    published = json.loads(source.read_text())
+    if published == MATRIX:
+        return
+    stale = sorted(set(published.get("providers", {})) - set(MATRIX["providers"]))
+    raise AssertionError(
+        f"remyxai/_agent_matrix.py is stale against {source}"
+        + (f" (missing providers: {stale})" if stale else "")
+        + ".\nRefresh it:\n"
+        f"  python scripts/sync_agent_matrix.py --from {source}"
+    )

@@ -91,7 +91,7 @@ Outrider is not installed on owner/name. Install it first:
 | `--interest <uuid>` | the workflow's configured interest | Override the Research Interest for this run |
 | `--ref <branch>` | the repo's default branch | The git ref to dispatch against |
 | `--provider <name>` | the workflow's default (`anthropic`) | Route Claude Code at a specific model provider for this dispatch (`anthropic`, `zai`, `moonshot`). See [Provider + model routing](#provider--model-routing) below |
-| `--model <name>` | (provider default) | Specific model to request from the provider (e.g. `claude-opus-4-7`, `glm-5.2`, `kimi-k3`). Forwarded as `ANTHROPIC_MODEL` env. Empty = the provider picks |
+| `--model <name>` | (provider default) | Specific model to request from the provider (e.g. `claude-opus-4-7`, `glm-5.3`, `kimi-k3`). Forwarded to whichever agent is selected, which sets that agent's own model env var (`ANTHROPIC_MODEL`, `CODEX_MODEL`, …). Empty = the provider picks |
 | `--claude-timeout <seconds>` | the action's 900s default | Wall-clock ceiling for the Claude Code agent calls on this dispatch (preflight + implementation share the budget). Raise for very large monorepos |
 | `--wait-for-slot` | off | Wait for a pending run to start instead of dispatching over it. See [Dispatching several runs at one repo](#dispatching-several-runs-at-one-repo) |
 
@@ -122,7 +122,7 @@ remyxai outrider set-provider-secret \
 # 2. Route this run at z.ai's GLM-5.2; scheduled cron runs continue
 #    to use the workflow's default (Anthropic).
 remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
-  --provider zai --model glm-5.2
+  --provider zai --model glm-5.3
 
 # Or compare against an older z.ai model on the same paper/repo:
 remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \

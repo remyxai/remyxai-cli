@@ -42,7 +42,7 @@ ERROR ✗ auth check: ANTHROPIC_AUTH_TOKEN is not set — agent calls will fail 
 ```
 Plan:
   - Repo:      owner/name
-  - Setup:     two-tier (default) — drafter zai:glm-5.2 + refiner anthropic, cron off
+  - Setup:     two-tier (default) — drafter zai:glm-5.3 + refiner anthropic, cron off
   - Keys:      anthropic — pushed by the engine from your connected credential (workflow default)
                zai — ZAI_API_KEY from this shell → repo secret (not connected server-side)
 ```
