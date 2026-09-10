@@ -90,11 +90,15 @@ The schedule block is rendered commented-out (not removed entirely), so re-enabl
 `setup-local` takes `--agent` alongside `--backend`: the first picks the coding-agent CLI, the second the model behind it.
 
 ```bash
-remyxai outrider setup-local --repo owner/name --auto-interest \
-  --agent codex --backend anthropic
+remyxai outrider setup-local --repo owner/name --auto-interest --agent codex
 ```
 
-The generated workflow declares `agent` as a dispatch input too, so a single install can switch agents per run — provided that agent's credential is on the repo (`CODEX_API_KEY`, `BACKBOARD_API_KEY`). `--agent` is not yet available on `outrider init`; that path is provisioned server-side and needs the engine to grow the same axis.
+Naming the agent is enough: an unset `--backend` follows the agent to its own
+vendor (`codex` → `openai`, `claude` → `anthropic`). Pass `--backend` to route
+elsewhere — an impossible pair such as `--agent codex --backend anthropic` is
+refused before anything is written, with the working agent named.
+
+The generated workflow declares `agent` as a dispatch input too, so a single install can switch agents per run — provided the secret that pair needs is on the repo. That is always exactly one key, and never an agent-specific one for Claude Code or Codex: the action derives the agent's credential from the provider's (`OPENAI_API_KEY` for `codex` + `openai`). Backboard is the one agent with its own key (`BACKBOARD_API_KEY`), because it is the provider relationship — it resolves models against its own catalogue.
 
 Engine-side `outrider init --no-cron` is not yet supported; for now, prefer `setup-local --no-cron` if you need that knob.
 

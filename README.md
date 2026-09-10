@@ -77,8 +77,11 @@ remyxai outrider trigger --repo your-org/your-repo \
   --agent codex --provider openai --model gpt-5.4-mini
 ```
 
-`--agent` reaches `trigger` and `setup-local` today. On `init` it waits for the
-engine to grow an agent axis — that install path is provisioned server-side.
+`--agent` is on `trigger`, `setup-local` and `init`. One caveat on `init`: it
+provisions server-side, so the flag only takes effect once the engine supports
+the agent axis — the CLI reads the provisioned workflow back and tells you
+plainly if it was ignored, rather than reporting success. `setup-local --agent`
+works on any engine today.
 
 | Flag | Applies to | Default |
 |---|---|---|

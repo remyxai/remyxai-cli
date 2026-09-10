@@ -950,6 +950,9 @@ def handle_outrider_setup_local(
     # provider pairs with it, which is exactly the kind of rule nobody should
     # have to carry. Derived before validation so both install paths see a
     # concrete value.
+    # Remember whether the caller actually passed --backend before deriving
+    # one, so a later error can blame the right flag.
+    backend_given = bool(backend)
     if not backend:
         backend = (
             agent_matrix.home_provider(agent) or _TEMPLATE_DEFAULT_PROVIDER
@@ -960,7 +963,20 @@ def handle_outrider_setup_local(
             f"unknown --backend {backend!r}; must be one of: "
             f"{', '.join(sorted(_BACKEND_REGISTRY))}"
         )
-    if two_tier and backend != "anthropic":
+    if two_tier and agent_matrix.resolve_agent(agent) != agent_matrix.DEFAULT_AGENT:
+        # Say what is actually wrong. The two-tier install rewrites an
+        # Anthropic-Messages workflow template per stage, so it is
+        # Claude-Code-only by construction. Before this check, `--two-tier
+        # --agent codex` derived `openai` as the backend and then fell into
+        # the `--backend` error below — blaming a flag the caller never passed.
+        raise click.UsageError(
+            f"--two-tier runs Claude Code only (each stage rewrites an "
+            f"Anthropic-Messages template in place), so --agent "
+            f"{agent_matrix.resolve_agent(agent)} cannot be used with it. "
+            f"Drop --two-tier for a single-file install on that agent, or "
+            f"drop --agent."
+        )
+    if two_tier and backend_given and backend != "anthropic":
         raise click.UsageError(
             "--backend is scoped to the single-file setup; --two-tier "
             "ignores it. Use --drafter-model / --refiner-model / "

@@ -1206,3 +1206,64 @@ def test_the_home_provider_is_derived_from_the_vendor_default_endpoint():
     assert agent_matrix.home_provider("codex") == "openai"
     # A native router has no family to match; it reaches its own catalogue.
     assert agent_matrix.home_provider("backboard") == ""
+
+
+def test_two_tier_with_a_non_claude_agent_blames_the_agent_not_backend(monkeypatch):
+    """Two-tier is Claude Code only by construction — each stage rewrites an
+    Anthropic-Messages template in place.
+
+    Before this, `--two-tier --agent codex` derived `openai` as the backend
+    (the agent's own vendor) and then fell into the `--backend` error,
+    telling the caller off for a flag they never passed. The error has to
+    name the actual conflict.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--agent", "codex", "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "--two-tier runs Claude Code only" in result.output
+    assert "--backend is scoped" not in result.output
+
+
+def test_two_tier_with_the_default_agent_still_derives_anthropic(monkeypatch):
+    """The derivation must not break the two-tier path: an unset agent is
+    claude, whose own vendor is anthropic, which is what two-tier needs."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x-long-enough-test-value")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+
+
+def test_two_tier_with_an_explicit_non_anthropic_backend_still_blames_backend(monkeypatch):
+    """The original `--backend` error survives for the case it was written
+    for: the caller *did* pass a non-anthropic backend to a two-tier install."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--backend", "zai", "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "--backend is scoped to the single-file setup" in result.output
