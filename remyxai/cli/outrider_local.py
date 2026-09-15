@@ -429,12 +429,16 @@ def _render_local_workflow(
     # backend's secret; add others with
     # ``remyxai outrider set-provider-secret`` for cross-backend dispatch).
     #
-    # INPUT BUDGET: workflow_dispatch accepts at most 10 top-level inputs, and
-    # GitHub rejects the whole workflow past that ("maximum number of inputs
-    # for workflow_dispatch event is 10"). This template shipped 11 — the nine
-    # the action's own canonical outrider.yml declares, plus ``search-method``
-    # and ``claude-timeout`` — so every setup-local install wrote a workflow
-    # GitHub would not run. Adding ``agent`` needed two slots back:
+    # INPUT BUDGET: GitHub documents a maximum of 10 workflow_dispatch inputs
+    # and actionlint fails a workflow that declares more. The limit is not
+    # enforced at dispatch time — measured directly, a workflow declaring 11
+    # and then 12 inputs was accepted and ran — so the 11 this template
+    # shipped were not breaking installs; they were outside the documented
+    # contract, failing lint, and past what the Actions "Run workflow" form
+    # is specified to render. Staying inside 10 keeps the template lintable,
+    # keeps the manual path predictable, and lands on exactly the set the
+    # action's own canonical outrider.yml declares. Adding ``agent`` inside
+    # that budget needed two slots back:
     #
     #   search-method   dropped. The canonical template never declared it
     #                   either, so ``trigger --search-method`` already warned

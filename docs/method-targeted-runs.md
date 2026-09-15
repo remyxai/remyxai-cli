@@ -201,7 +201,7 @@ Inputs the installed workflow doesn't declare are dropped and the dispatch retri
 remyxai outrider init --repo owner/name --interest <uuid> --force
 ```
 
-GitHub accepts at most 10 inputs per dispatch; the CLI rejects an over-full combination at the command boundary rather than letting GitHub 422 it.
+GitHub documents 10 as the maximum number of `workflow_dispatch` inputs. It is not enforced at dispatch time — a larger set is accepted in practice — so the CLI notes an over-full combination and dispatches it anyway rather than refusing a run GitHub would have accepted.
 
 
 ## Dispatching several runs at one repo

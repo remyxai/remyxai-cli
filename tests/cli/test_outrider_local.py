@@ -98,15 +98,16 @@ def test_render_unknown_backend_raises():
         outrider_local._render_local_workflow("uuid", backend="bedrock")
 
 
-def test_render_stays_within_githubs_workflow_dispatch_input_ceiling():
-    """workflow_dispatch accepts at most 10 inputs, and GitHub rejects the
-    whole workflow past that — "maximum number of inputs for
-    workflow_dispatch event is 10".
+def test_render_stays_within_githubs_documented_input_limit():
+    """GitHub documents a maximum of 10 workflow_dispatch inputs, and
+    actionlint fails a workflow declaring more.
 
-    This template shipped **11**, so every setup-local install wrote a
-    workflow GitHub would not run. Nothing caught it: the tests asserted that
-    particular inputs were present, never how many there were in total. This
-    is the guard that would have.
+    It is a documented limit rather than a runtime one — measured against the
+    REST API, workflows declaring 11 and 12 inputs both dispatched and ran —
+    so the 11 this template shipped were failing lint and sitting outside the
+    spec for the Actions "Run workflow" form, not breaking installs. The
+    budget is still worth holding, and nothing counted it before: the tests
+    asserted that particular inputs were present, never how many in total.
     """
     yaml = pytest.importorskip("yaml")
     for backend in ("anthropic", "zai", "moonshot"):
@@ -120,8 +121,8 @@ def test_render_stays_within_githubs_workflow_dispatch_input_ceiling():
             inputs = (on["workflow_dispatch"] or {}).get("inputs") or {}
             assert len(inputs) <= 10, (
                 f"{agent}/{backend} declares {len(inputs)} inputs "
-                f"({sorted(inputs)}); GitHub's ceiling is 10 and it rejects "
-                f"the workflow outright past it"
+                f"({sorted(inputs)}); GitHub documents 10 as the maximum and "
+                f"actionlint fails the workflow past it"
             )
 
 
@@ -142,9 +143,9 @@ def test_render_declares_the_inputs_the_action_canonically_declares():
 
 
 def test_render_does_not_declare_the_two_inputs_it_traded_away():
-    """Pinned deliberately: re-adding either silently breaks the workflow by
-    pushing it over the ceiling, and the failure looks like a YAML problem
-    rather than a budget one."""
+    """Pinned deliberately: re-adding either puts the template back over the
+    documented limit, where it fails lint and drifts from the canonical
+    workflow — and nothing in a run's output would say so."""
     yaml = pytest.importorskip("yaml")
     text = outrider_local._render_local_workflow("uuid")
     wf = yaml.safe_load(text)

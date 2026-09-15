@@ -138,9 +138,13 @@ PROVISION_POLL_TIMEOUT = 300
 # minute or two, but a busy Actions account can hold it much longer.
 QUEUE_POLL_INTERVAL = 15
 QUEUE_POLL_TIMEOUT = 900
-# GitHub's per-dispatch input ceiling (workflow_dispatch accepts at most 10
-# top-level inputs) and a conservative bound on a single input's size — the
-# whole payload has to stay under ~64KB.
+# GitHub *documents* a maximum of 10 workflow_dispatch inputs, and actionlint
+# fails a workflow that declares more. The REST dispatch endpoint does not
+# enforce it: a workflow declaring 11 and then 12 inputs was accepted and ran,
+# as did a dispatch carrying 11 of them. So this is the documented contract,
+# not a runtime rejection — worth saying out loud, never worth blocking a
+# dispatch that GitHub would have accepted. Paired with a conservative bound
+# on a single input's size, since the whole payload must stay under ~64KB.
 GH_MAX_DISPATCH_INPUTS = 10
 LEAD_CONTENT_MAX_CHARS = 60000
 
@@ -1590,11 +1594,13 @@ def handle_outrider_trigger(
     }
     supplied = {k: v for k, v in inputs.items() if v}
     if len(supplied) > GH_MAX_DISPATCH_INPUTS:
-        raise click.UsageError(
-            f"{len(supplied)} inputs supplied ({', '.join(sorted(supplied))}) "
-            f"but GitHub accepts at most {GH_MAX_DISPATCH_INPUTS} per "
-            f"workflow_dispatch. Drop the ones the workflow's own defaults "
-            f"already cover."
+        click.secho(
+            f"note: {len(supplied)} inputs supplied "
+            f"({', '.join(sorted(supplied))}); GitHub documents a maximum of "
+            f"{GH_MAX_DISPATCH_INPUTS} per workflow_dispatch. Dispatching "
+            f"anyway — the API accepts more in practice. If it is rejected, "
+            f"drop the ones the workflow's own defaults already cover.",
+            fg="yellow",
         )
 
     # A pending run means this dispatch cancels it (static concurrency group).

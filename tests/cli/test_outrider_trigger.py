@@ -664,17 +664,22 @@ def test_trigger_rejects_oversized_lead_content():
         )
 
 
-def test_trigger_rejects_more_inputs_than_github_accepts(monkeypatch):
-    _dispatch_capture(monkeypatch)
-    with pytest.raises(click.UsageError, match="at most 10"):
-        outrider_actions.handle_outrider_trigger(
-            repo="owner/name", search_method=None, pin_arxiv="2402.02347v3",
-            interest_id="6a730cc4-010c-49ce-9c7f-6d9c59431739", ref=None,
-            claude_timeout=1800, provider="zai", model="glm-5.2",
-            mode="recommend", publish="pr", start_from_ref="b",
-            lead_content="ctx", staged_synthesis=True,
-            fidelity_policy="advisory",
-        )
+def test_trigger_notes_but_does_not_block_a_large_input_set(monkeypatch, capsys):
+    """The 10-input maximum is documented, not enforced at dispatch time —
+    measured directly, GitHub accepted a dispatch carrying 11. Refusing one
+    it would have run turns a note into a dead end, so this warns and
+    proceeds."""
+    captured = _dispatch_capture(monkeypatch)
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv="2402.02347v3",
+        interest_id="6a730cc4-010c-49ce-9c7f-6d9c59431739", ref=None,
+        claude_timeout=1800, provider="zai", model="glm-5.2",
+        mode="recommend", publish="pr", start_from_ref="b",
+        lead_content="ctx", staged_synthesis=True,
+        fidelity_policy="advisory",
+    )
+    assert "maximum of 10" in capsys.readouterr().out
+    assert captured["inputs"], "the dispatch should still have gone out"
 
 
 def test_cli_refinement_flags_reach_the_dispatch(monkeypatch, tmp_path):
