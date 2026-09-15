@@ -356,7 +356,7 @@ def provision_action(
                     and leaves the workflow files — and their tier config — as
                     they are.
         sealed_provider_secrets:
-                    BYOK (REMYX-296). Provider keys already sealed against
+                    BYOK. Provider keys already sealed against
                     this repo's Actions public key, as
                     ``[{"secret_name", "key_id", "encrypted_value"}]``. The
                     engine relays the ciphertext straight to GitHub — it

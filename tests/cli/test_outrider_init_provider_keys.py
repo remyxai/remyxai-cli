@@ -401,7 +401,7 @@ def test_plan_marks_the_workflow_default():
 
 # ─── --github-secrets-only: the key is sealed here, and Remyx never holds a copy ───────────
 #
-# REMYX-296. The promise is not "we delete it after" — it is "we cannot read
+# The promise is not "we delete it after" — it is "we cannot read
 # it". Two things have to hold for that to be true from this side:
 #
 #   * `connect_credential` is never called, because that call IS the stored

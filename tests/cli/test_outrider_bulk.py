@@ -1,4 +1,4 @@
-"""Tests for the bulk-repos + no-cron CLI improvements — REMYX-147.
+"""Tests for the bulk-repos + no-cron CLI improvements.
 
 Covers:
 - TSV parser (happy path, bad rows surfaced with line numbers, blanks /
