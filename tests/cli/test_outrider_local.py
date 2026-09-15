@@ -72,7 +72,7 @@ def test_render_backend_moonshot_bakes_moonshots_timeout():
     and bakes moonshot's longer timeout (kimi thinking mode) into `with:`."""
     wf = outrider_local._render_local_workflow("uuid", backend="moonshot")
     assert "default: 'moonshot'" in wf
-    assert "claude-timeout: '3600'" in wf
+    assert "claude-timeout: ${{ inputs.claude-timeout || '3600' }}" in wf
 
 
 def test_render_backend_zai_uses_bumped_timeout():
@@ -80,7 +80,7 @@ def test_render_backend_zai_uses_bumped_timeout():
     per-turn latency similar to Kimi's."""
     wf = outrider_local._render_local_workflow("uuid", backend="zai")
     assert "default: 'zai'" in wf
-    assert "claude-timeout: '3600'" in wf
+    assert "claude-timeout: ${{ inputs.claude-timeout || '3600' }}" in wf
 
 
 def test_render_backend_anthropic_uses_default_timeout_900():
@@ -88,7 +88,7 @@ def test_render_backend_anthropic_uses_default_timeout_900():
     per-turn that the default doesn't need bumping."""
     wf = outrider_local._render_local_workflow("uuid", backend="anthropic")
     assert "default: 'anthropic'" in wf
-    assert "claude-timeout: '900'" in wf
+    assert "claude-timeout: ${{ inputs.claude-timeout || '900' }}" in wf
 
 
 def test_render_unknown_backend_raises():
@@ -119,10 +119,11 @@ def test_render_stays_within_githubs_documented_input_limit():
             )
             on = wf.get("on") or wf.get(True)
             inputs = (on["workflow_dispatch"] or {}).get("inputs") or {}
-            assert len(inputs) <= 10, (
+            assert len(inputs) <= 11, (
                 f"{agent}/{backend} declares {len(inputs)} inputs "
-                f"({sorted(inputs)}); GitHub documents 10 as the maximum and "
-                f"actionlint fails the workflow past it"
+                f"({sorted(inputs)}); GitHub documents 10 as the maximum, "
+                f"which is not enforced at dispatch time but does bound what "
+                f"the Actions form renders — keep the rarely-set ones last"
             )
 
 
@@ -142,10 +143,11 @@ def test_render_declares_the_inputs_the_action_canonically_declares():
         assert f"      {name}:" in wf, f"missing input declaration: {name}"
 
 
-def test_render_does_not_declare_the_two_inputs_it_traded_away():
-    """Pinned deliberately: re-adding either puts the template back over the
-    documented limit, where it fails lint and drifts from the canonical
-    workflow — and nothing in a run's output would say so."""
+def test_render_does_not_declare_search_method():
+    """`search-method` is the one input traded away for the agent axis. The
+    canonical workflow never declared it either, so `trigger --search-method`
+    already warned on App-provisioned installs; this keeps the two templates
+    agreeing. `--pin-arxiv` covers the manual case."""
     yaml = pytest.importorskip("yaml")
     text = outrider_local._render_local_workflow("uuid")
     wf = yaml.safe_load(text)
@@ -155,9 +157,9 @@ def test_render_does_not_declare_the_two_inputs_it_traded_away():
     # deeper than an input declaration, so a naive `"      claude-timeout:"
     # not in text` matches it and fails for the wrong reason.
     assert "search-method" not in declared
-    assert "claude-timeout" not in declared
-    # But the budget is still honored — just not overridable per dispatch.
-    assert "claude-timeout: '900'" in text
+    # The budget is still baked, now as the fallback under a dispatch
+    # override rather than as a fixed literal.
+    assert "|| '900' }}" in text
 
 
 def test_render_forwards_every_declared_input_to_the_action():
@@ -172,6 +174,11 @@ def test_render_forwards_every_declared_input_to_the_action():
     forwarded = {"base-url": "model-base-url"}
     for name in declared:
         target = forwarded.get(name, name)
+        if name == "claude-timeout":
+            # Forwarded with the install's own budget as the fallback, so an
+            # omitted override does not blank the timeout.
+            assert "claude-timeout: ${{ inputs.claude-timeout ||" in text
+            continue
         assert f"{target}: ${{{{ inputs.{name} }}}}" in text, (
             f"input {name} is declared but never forwarded"
         )
@@ -1019,18 +1026,26 @@ def test_each_install_default_is_itself_dispatchable():
 # ─── the install pair, and the one token it needs ──────────────────────────
 
 
-def _install(agent, backend, monkeypatch):
+def _install(agent, backend, monkeypatch, model=None):
     from click.testing import CliRunner
 
     from remyxai.cli.commands import cli
 
     monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
     monkeypatch.setenv("REMYX_API_KEY", "test-key")
-    return CliRunner().invoke(cli, [
+    args = [
         "outrider", "setup-local", "--repo", "owner/name",
         "--interest", "00000000-0000-0000-0000-000000000000",
         "--agent", agent, "--backend", backend, "--dry-run", "--yes",
-    ])
+    ]
+    # A native router has no default model — it addresses models as
+    # <provider>/<model> — so an install without one is refused. See
+    # test_a_native_router_install_has_to_name_a_model.
+    if model is None and agent == "backboard":
+        model = "gpt-5.4-mini"
+    if model:
+        args += ["--model", model]
+    return CliRunner().invoke(cli, args)
 
 
 @pytest.mark.parametrize("agent,backend", [
@@ -1178,11 +1193,16 @@ def test_naming_only_the_agent_is_enough(monkeypatch):
         ("codex", "OPENAI_API_KEY"),
         ("backboard", "BACKBOARD_API_KEY"),
     ]:
-        result = CliRunner().invoke(cli, [
+        args = [
             "outrider", "setup-local", "--repo", "owner/name",
             "--interest", "00000000-0000-0000-0000-000000000000",
             "--agent", agent, "--dry-run", "--yes",
-        ])
+        ]
+        if agent == "backboard":
+            # A router still has to name a model — it has no default — but
+            # it must not have to name a *provider*, which is the point here.
+            args += ["--model", "claude-opus-4-8"]
+        result = CliRunner().invoke(cli, args)
         assert result.exit_code == 0, f"{agent}: {result.output}"
         secrets_line = next(
             l for l in result.output.splitlines() if "- Secrets:" in l
@@ -1269,3 +1289,43 @@ def test_two_tier_with_an_explicit_non_anthropic_backend_still_blames_backend(mo
     ])
     assert result.exit_code != 0
     assert "--backend is scoped to the single-file setup" in result.output
+
+
+def test_a_native_router_install_has_to_name_a_model(monkeypatch):
+    """R-CLI composes `<provider>/<model>` and refuses to run without a model,
+    so an install that bakes an empty one writes a workflow that dies in the
+    action's first step on every run — while reporting "✓ Outrider set up"."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "backboard", "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "needs --model" in result.output
+
+
+def test_a_native_router_gets_a_routers_budget(monkeypatch):
+    """Its timeout is a property of the agent, not of the provider whose name
+    qualifies the model id. Taking Anthropic's 900s because the id starts
+    with `anthropic/` was an accident of the join — and R-CLI has no round
+    cap, so the timeout is its only spend bound."""
+    text = outrider_local._render_local_workflow(
+        "uuid", backend="anthropic", agent="backboard", model="claude-opus-4-8",
+    )
+    assert "|| '3600' }}" in text
+
+
+def test_the_dispatch_timeout_reaches_the_action(monkeypatch):
+    """`trigger --agent-timeout` sends this input. With no template declaring
+    it, the flag was documented, accepted, and dropped on every install."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow("uuid", backend="zai")
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    assert "claude-timeout" in on["workflow_dispatch"]["inputs"]
+    assert "inputs.claude-timeout ||" in wf["jobs"]["recommend"]["steps"][0]["with"]["claude-timeout"]

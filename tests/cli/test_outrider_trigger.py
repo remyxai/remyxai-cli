@@ -1070,6 +1070,93 @@ def test_a_dropped_agent_input_is_called_out_loudly(monkeypatch):
     assert result.exit_code == 0, result.output
     # It retried without `agent` …
     assert "agent" not in calls[1]
-    # … and said so in terms that name the actual consequence.
+    # … and said so in terms that name the actual consequence. It does not
+    # claim which agent ran: an install written by `setup-local --agent
+    # backboard` defaults to backboard, so "you got Claude Code" would be a
+    # guess dressed as a fact.
     assert "not 'codex'" in result.output
-    assert "Claude Code" in result.output
+    assert "workflow's own agent" in result.output
+
+
+def test_asking_for_the_default_agent_is_not_a_substitution_alarm(monkeypatch):
+    """The red alarm means "your run executed a different agent than you
+    asked for". Firing it for `--agent claude` on a workflow that predates
+    the input announced a substitution that did not happen, and prescribed a
+    re-provision that would change nothing."""
+    calls = []
+
+    def fake_dispatch(repo, branch, inputs):
+        calls.append(dict(inputs))
+        if len(calls) == 1:
+            return False, 'HTTP 422: Unexpected inputs provided: ["agent"]'
+        return True, ""
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "claude",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "workflow's own agent" not in result.output
+
+
+def test_a_dropped_agent_never_retries_into_a_pair_the_cli_refuses(monkeypatch):
+    """Dropping `agent` leaves `provider` behind, so a codex+openai dispatch
+    retried as a bare openai one — which runs on the install's own agent and,
+    if that is Claude Code, is the family mismatch this CLI refuses at the
+    command boundary. Burning a run to discover that is worse than stopping."""
+    calls = []
+
+    def fake_dispatch(repo, branch, inputs):
+        calls.append(dict(inputs))
+        return False, 'HTTP 422: Unexpected inputs provided: ["agent"]'
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--agent", "codex", "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code != 0
+    assert "not retrying without `agent`" in result.output
+    assert len(calls) == 1, "the pruned retry must not have gone out"
+
+
+def test_an_unnamed_agent_does_not_reject_a_providers_own_install(monkeypatch):
+    """An omitted --agent means "whatever this install runs". A workflow from
+    `setup-local --agent codex` defaults to codex, so validating against
+    Claude Code refused a dispatch that was correct for that repo."""
+    calls = []
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider",
+                        lambda repo, branch, inputs: (calls.append(dict(inputs)), (True, ""))[1])
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code == 0, result.output
+    assert calls and calls[0]["provider"] == "openai"
+    # Still says something — it just does not pretend to know the agent.
+    assert "pass --agent" in result.output

@@ -445,13 +445,13 @@ def _render_local_workflow(
     #                   on App-provisioned installs; this only makes the two
     #                   templates agree. ``--pin-arxiv`` covers the manual
     #                   case.
-    #   claude-timeout  no longer an input; baked into ``with:`` from the
-    #                   provider's own default. The install still gets the
-    #                   right budget — which matters more than ever, since
-    #                   neither Codex nor R-CLI has a round cap and the
-    #                   timeout is their only spend bound — you just cannot
-    #                   override it per dispatch. ``trigger --claude-timeout``
-    #                   warns via the undeclared-input path.
+    #   claude-timeout  kept, but last in the list and defaulted to empty:
+    #                   the install's own budget is baked into ``with:`` and a
+    #                   dispatch may override it. Dropping it made `trigger
+    #                   --agent-timeout` a documented flag that every template
+    #                   silently discarded, which matters because neither
+    #                   Codex nor R-CLI has a round cap and the timeout is
+    #                   their only spend bound.
     #
     # The result is canonical parity plus the new axis, which is a better
     # place to be than the ad-hoc set it had drifted into.
@@ -469,6 +469,12 @@ def _render_local_workflow(
         )
     reg = _BACKEND_REGISTRY[backend]
     default_timeout = reg["default_claude_timeout"]
+    # A native router has no round cap, so the timeout is its only spend
+    # bound — and its budget is a property of the agent, not of the provider
+    # whose name happens to qualify the model id. Taking Anthropic's 900s
+    # because the id starts with `anthropic/` was an accident of the join.
+    if agent_matrix.is_native_router(agent):
+        default_timeout = _DEFAULT_STAGE_TIMEOUT
     # Every provider the ACTION knows, not just the ones this template can
     # render a default for. The two are different questions and conflating
     # them broke a real dispatch: `--backend` picks the install default and
@@ -563,6 +569,10 @@ on:
         description: 'Enable the multi-pass staged-synthesis flow (the refiner sets true).'
         required: false
         default: 'false'
+      claude-timeout:
+        description: 'Wall-clock seconds per agent phase for this run (empty = the install default below). Neither Codex nor R-CLI has a round cap, so this is their only spend bound.'
+        required: false
+        default: ''
 
 jobs:
   recommend:
@@ -599,11 +609,10 @@ jobs:
           model: ${{{{ inputs.model }}}}
           model-base-url: ${{{{ inputs.base-url }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
-          # Baked rather than dispatched: workflow_dispatch allows only 10
-          # inputs and this one lost the tie-break (see the input-budget note
-          # in _render_local_workflow). Neither Codex nor R-CLI has a round
-          # cap, so this is their only spend bound — keep it tight.
-          claude-timeout: '{default_timeout}'
+          # Dispatch override first, install default second. `trigger
+          # --agent-timeout` sends this input; with no template declaring it,
+          # the flag was documented, accepted, and dropped on every install.
+          claude-timeout: ${{{{ inputs.claude-timeout || '{default_timeout}' }}}}
           # Forwarded so outrider-weekly-refine.yml can dispatch a refinement
           # run (mode + start-from-ref + lead-content + staged-synthesis).
           mode: ${{{{ inputs.mode }}}}
@@ -961,6 +970,18 @@ def handle_outrider_setup_local(
         backend = (
             agent_matrix.home_provider(agent) or _TEMPLATE_DEFAULT_PROVIDER
         )
+    # A native router composes `<provider>/<model>` and refuses to run without
+    # a model — there is no "the provider's default" for it, because the
+    # provider is only half of the id. Without this the install wrote a
+    # workflow that looked healthy and died in the action's first step on
+    # every run: "agent=backboard with provider=anthropic also needs a model".
+    if agent_matrix.is_native_router(agent) and not (model or "").strip():
+        raise click.UsageError(
+            f"--agent {agent_matrix.resolve_agent(agent)} needs --model: it "
+            f"addresses models as <provider>/<model> and has no default. Pass "
+            f"the bare id for --backend {backend} (the action composes the "
+            f"qualified form), e.g. --backend openrouter --model z-ai/glm-5.3."
+        )
 
     if backend not in _BACKEND_REGISTRY:
         raise click.UsageError(
@@ -1174,8 +1195,10 @@ def handle_outrider_setup_local(
             f"  - Agent:     {agent_matrix.resolve_agent(agent)} "
             f"({agent_matrix.agent_display_name(agent)})"
         )
-        if backend != "anthropic":
-            click.echo(f"  - Backend:   {backend} ({_BACKEND_REGISTRY[backend]['display_name']})")
+        # Always shown once an agent is named. Hiding it for the default
+        # provider made a Backboard install's most consequential line
+        # invisible — it is the provider half of the model id R-CLI resolves.
+        click.echo(f"  - Backend:   {backend} ({_BACKEND_REGISTRY[backend]['display_name']})")
     click.echo(f"  - Secrets:   {secrets_line}")
     click.echo("  - PR auth:   enable the repo 'Actions can create PRs' setting "
                "(PRs by github-actions[bot])")

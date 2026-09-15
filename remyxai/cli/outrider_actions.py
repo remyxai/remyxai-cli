@@ -849,6 +849,17 @@ def handle_outrider_init(
     Remyx. For customers whose policy forbids giving model-provider keys to a
     third party.
     """
+    # Same pair check `trigger` and `setup-local` run. Without it `init` was
+    # the one door where an impossible combination walked through silently —
+    # harmless only while the engine ignored `agent`, and a bad install the
+    # day it stopped.
+    if agent:
+        problem = agent_matrix.first_error(
+            agent_matrix.check_pair(agent, provider or "", model or "")
+        )
+        if problem:
+            raise click.UsageError(problem.message)
+
     if interest_id and auto_interest:
         raise click.UsageError(
             "--interest and --auto-interest are mutually exclusive."
@@ -1218,13 +1229,14 @@ def _report_provisioned_agent(repo: str, agent: Optional[str]) -> None:
         # Claude Code is what every engine renders, axis or not.
         return
 
-    honored = _provisioned_workflow_honors_agent(repo)
-    if honored is True:
+    installed = _provisioned_agent(repo)
+    if installed == resolved:
         click.echo(
             f"  Agent: {agent_matrix.agent_display_name(resolved)} "
             f"({resolved})"
         )
         return
+    honored = None if installed is None else False
     if honored is None:
         click.secho(
             f"  ⚠ could not read the provisioned workflow to confirm "
@@ -1247,28 +1259,38 @@ def _report_provisioned_agent(repo: str, agent: Optional[str]) -> None:
     )
 
 
-def _provisioned_workflow_honors_agent(repo: str) -> Optional[bool]:
-    """Does the engine-rendered workflow actually route the `agent` input?
+_WORKFLOW_AGENT_DEFAULT_RE = re.compile(
+    r"^      agent:\s*$.*?^        default:\s*'([A-Za-z0-9_-]+)'",
+    re.M | re.S,
+)
 
-    Returns True/False, or None when it cannot be read (a private-repo
-    permission gap, a not-yet-merged setup PR) — in which case say nothing
-    rather than guess.
+
+def _provisioned_agent(repo: str, ref: Optional[str] = None) -> Optional[str]:
+    """Which agent the installed workflow actually runs, or None if unknown.
 
     This exists because the engine's provision endpoint is a permissive
-    `data.get()` passthrough: an engine that predates the agent axis accepts
-    `agent` in the payload, returns 200, and renders a Claude-Code workflow.
-    Trusting that 200 would tell a user they had provisioned Codex while
-    every run quietly executed Claude Code — the same class of silent
-    substitution as an undeclared dispatch input being dropped, and worth
-    the extra round trip to rule out.
+    passthrough: one that predates the agent axis accepts `agent`, returns
+    200, and renders a Claude-Code workflow. Trusting that 200 would tell a
+    user they had provisioned Codex while every run quietly executed the
+    default agent instead.
+
+    It reads the *baked default* rather than merely checking that the file
+    forwards an `agent` input. Those are different propositions, and the
+    weaker one passes on exactly the install this is meant to catch — an
+    engine that renders the axis but ignored the requested value leaves
+    `default: 'claude'` in a file that does forward `inputs.agent`.
+
+    None means "cannot tell": an unreadable file (private-repo permissions),
+    a setup PR not merged yet, or a workflow from before the axis.
     """
+    args = ["gh", "api",
+            f"/repos/{repo}/contents/.github/workflows/{WORKFLOW_FILENAME}"]
+    if ref:
+        args[-1] += f"?ref={ref}"
+    args += ["--jq", ".content"]
     try:
-        raw = subprocess.check_output(
-            ["gh", "api",
-             f"/repos/{repo}/contents/.github/workflows/{WORKFLOW_FILENAME}",
-             "--jq", ".content"],
-            text=True, stderr=subprocess.DEVNULL,
-        ).strip()
+        raw = subprocess.check_output(args, text=True,
+                                      stderr=subprocess.DEVNULL).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
     if not raw:
@@ -1277,10 +1299,11 @@ def _provisioned_workflow_honors_agent(repo: str) -> Optional[bool]:
         body = base64.b64decode(raw).decode("utf-8", "replace")
     except (ValueError, TypeError):
         return None
-    # The action only receives the axis if the workflow forwards it. A
-    # workflow that merely *declares* an `agent` input without passing it on
-    # is the same silent no-op, so look for the forwarding.
-    return "agent:" in body and "inputs.agent" in body
+    if "inputs.agent" not in body:
+        # Declares no axis at all: this install runs the action's default.
+        return agent_matrix.DEFAULT_AGENT if "remyxai/outrider" in body else None
+    match = _WORKFLOW_AGENT_DEFAULT_RE.search(body)
+    return match.group(1) if match else None
 
 
 def _outrider_workflow_exists(repo: str) -> bool:
@@ -1326,6 +1349,27 @@ def _gh_dispatch_outrider(repo, branch, inputs):
 _UNEXPECTED_INPUTS_RE = re.compile(r'"([^"]+)"')
 
 
+def _retry_is_safe(inputs, dropped) -> Optional[str]:
+    """Why a pruned retry must not go out, or None.
+
+    The self-heal drops exactly the inputs GitHub named. When `agent` is one
+    of them the rest stay — so a `codex` + `openai` dispatch retried as a
+    plain `openai` dispatch, which runs on the workflow's own agent. If that
+    agent speaks a different API family than the provider left behind, the
+    retry is the family mismatch this CLI refuses at the command boundary.
+    Burning a run to discover that is worse than not dispatching.
+    """
+    if "agent" not in dropped:
+        return None
+    provider = inputs.get("provider") or ""
+    if not provider:
+        return None
+    problem = agent_matrix.first_error(
+        agent_matrix.check_pair("", provider, inputs.get("model") or "")
+    )
+    return problem.message if problem else None
+
+
 def _dispatch_with_input_fallback(repo, branch, inputs):
     """Dispatch, dropping inputs the installed workflow doesn't declare.
 
@@ -1347,6 +1391,14 @@ def _dispatch_with_input_fallback(repo, branch, inputs):
     if not undeclared:
         return ok, stderr, []
     pruned = {k: v for k, v in inputs.items() if k not in undeclared}
+    unsafe = _retry_is_safe(pruned, undeclared)
+    if unsafe:
+        return False, (
+            f"not retrying without `agent`: {unsafe} This install predates "
+            f"the agent axis, so the run would execute on its own agent. "
+            f"Re-provision it first (`remyxai outrider init --force`), or "
+            f"drop --provider to run it as installed."
+        ), sorted(undeclared)
     ok, stderr = _gh_dispatch_outrider(repo, branch, pruned)
     return ok, stderr, sorted(undeclared)
 
@@ -1516,9 +1568,25 @@ def handle_outrider_trigger(
     # dispatch round-trip. Only a durable fact hard-fails — see
     # remyxai.agent_matrix on why an unrecognized value passes through with a
     # warning instead.
+    #
+    # Only when the caller NAMED an agent, though. An omitted `--agent` means
+    # "whatever this install runs", and a workflow written by `setup-local
+    # --agent codex` defaults to codex, not to the action's empty-input
+    # default. Validating against Claude Code both refused valid dispatches
+    # (`--provider openai` on a codex install) and waved through invalid ones
+    # (`--provider zai`, which that install's codex default cannot serve), so
+    # an unnamed agent downgrades the family mismatch to a warning the run
+    # itself will confirm or disprove.
     for problem in agent_matrix.check_pair(agent or "", provider or "", model or ""):
-        if problem.is_error:
+        if problem.is_error and agent:
             raise click.UsageError(problem.message)
+        if problem.is_error:
+            click.secho(
+                f"⚠ {problem.message} This install may run a different agent "
+                f"— pass --agent to check the pair before dispatching.",
+                fg="yellow",
+            )
+            continue
         click.secho(f"⚠ {problem.message}", fg="yellow")
     lead = _resolve_lead_content(lead_content, lead_content_file)
 
@@ -1655,7 +1723,8 @@ def handle_outrider_trigger(
             f"    remyxai outrider init --repo {resolved_repo} --force",
             fg="yellow",
         )
-        if "agent" in dropped:
+        requested_agent = agent_matrix.resolve_agent(agent)
+        if "agent" in dropped and requested_agent != agent_matrix.DEFAULT_AGENT:
             # Worth saying separately and louder. Dropping `publish` falls
             # back to a default that does roughly what you asked; dropping
             # `agent` means the run is executing on a DIFFERENT coding agent
@@ -1663,9 +1732,9 @@ def handle_outrider_trigger(
             # nothing downstream will look wrong — the run just quietly is
             # not the experiment you thought you launched.
             click.secho(
-                f"  → the run is now on the workflow's own agent "
-                f"(Claude Code), not {agent!r}. Nothing downstream will flag "
-                f"this. Re-provision before trusting the result:\n"
+                f"  → the run is now on the workflow's own agent, not "
+                f"{requested_agent!r}. Nothing downstream will flag this. "
+                f"Re-provision before trusting the result:\n"
                 f"    remyxai outrider init --repo {resolved_repo} --force",
                 fg="red", bold=True,
             )

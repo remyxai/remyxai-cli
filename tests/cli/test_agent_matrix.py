@@ -335,7 +335,10 @@ def test_the_only_claude_mentions_left_are_true_of_claude_specifically():
             "Any provider counts equally",
             "was wrong in three ways",  # the cocoindex post-mortem comment
             'a Claude',                 # …continued
-            "(Claude Code), not",       # the dropped-agent warning
+            "Validating against Claude Code",  # the unnamed-agent rule:
+                                              # an omitted --agent is the
+                                              # install's default, not the
+                                              # action's
             "executed Claude Code",     # the ignored-agent report
             "runs Claude Code",         # …and its user-facing line
             "renders a Claude-Code",    # what an engine without the axis does

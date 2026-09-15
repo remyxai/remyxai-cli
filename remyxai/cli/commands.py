@@ -935,8 +935,12 @@ def outrider_init(
                   "the workflow can still dispatch another agent at run time, "
                   "provided that agent's credential is set on the repo. "
                   "setup-local writes only the selected backend's secret — "
-                  "add an agent credential with `gh secret set CODEX_API_KEY` "
-                  "or `BACKBOARD_API_KEY`."
+                  "add another backend's with `remyxai outrider "
+                  "set-provider-secret`. Most agents read no credential of "
+                  "their own: the action derives theirs from the provider's "
+                  "key, and a repo secret named for the agent would shadow "
+                  "it. A native router is the exception — its own key IS the "
+                  "credential — so `gh secret set BACKBOARD_API_KEY`."
               ))
 @click.option("--model", "model", default=None,
               help=(
@@ -951,8 +955,9 @@ def outrider_init(
               type=click.Choice(TWO_TIER_BACKEND_CHOICES),
               default=None,
               help=(
-                  "Which Anthropic-Messages-compat backend the single-file "
-                  "setup routes at by default. Selects the workflow_dispatch "
+                  "Which model backend the single-file setup routes at by "
+                  "default — on either API family, since the agent axis "
+                  "decides which one is spoken. Selects the workflow_dispatch "
                   "`provider` input's default and the secret setup-local "
                   "prompts for (only the selected backend's secret is written; "
                   "add others via `gh secret set` for per-dispatch switching). "
