@@ -758,7 +758,7 @@ def test_render_does_not_declare_a_credential_the_action_derives():
     credential with a secret the repo lacks sets it empty and shadows the
     resolved value.
 
-    Found live. Referencing every matrix credential put
+    Observed on a real dispatch: referencing every matrix credential put
     `CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}` in the block; the repo had
     no such secret; and a `codex` + `openai` dispatch died with
     "agent=codex requires CODEX_API_KEY in the caller's env block" one step
@@ -777,7 +777,7 @@ def test_every_backend_choice_actually_renders():
     Deriving `--backend` from the matrix (every provider serving
     anthropic-messages) put `openrouter` on the flag: click accepted it and
     the renderer then raised ValueError, because there is no `_STAGE_POLICY`
-    row to render from. Caught before it shipped, pinned here.
+    row to render from.
     """
     assert outrider_local.TWO_TIER_BACKEND_CHOICES
     for backend in outrider_local.TWO_TIER_BACKEND_CHOICES:
@@ -956,7 +956,7 @@ def test_the_action_ref_can_be_overridden_for_testing(monkeypatch):
     """
     import importlib
 
-    branch = "salma/some-feature-branch"
+    branch = "someone/some-feature-branch"
     monkeypatch.setenv("REMYXAI_OUTRIDER_ACTION_REF", branch)
     reloaded = importlib.reload(outrider_local)
     try:
@@ -974,7 +974,8 @@ def test_the_action_ref_can_be_overridden_for_testing(monkeypatch):
 def test_the_workflows_provider_options_cover_everything_the_cli_accepts():
     """The CLI must not validate a pair GitHub will then reject.
 
-    Found live: `trigger --agent codex --provider openai` passed the local
+    Observed on a real dispatch: `trigger --agent codex --provider openai`
+    passed the local
     pair check and came back from GitHub as "Provided value 'openai' for
     input 'provider' not in the list of allowed values". The choice list was
     built from `_BACKEND_REGISTRY` — the set this template can render an

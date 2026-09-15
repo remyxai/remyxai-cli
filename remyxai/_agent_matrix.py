@@ -9,7 +9,7 @@ from ``src/agents/providers.py``. Read this through
 :mod:`remyxai.agent_matrix`, which adds the query helpers — nothing should
 import ``MATRIX`` directly.
 
-Vendored from: /home/ubuntu/outrider/docs/agent-matrix.json
+Vendored from: remyxai/outrider — docs/agent-matrix.json (local checkout)
 """
 import json
 

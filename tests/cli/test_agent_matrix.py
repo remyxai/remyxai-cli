@@ -131,7 +131,7 @@ def test_the_suggestion_prefers_a_direct_speaker_over_a_native_router():
     Answering "OpenAI does not serve anthropic-messages" with "use backboard"
     tells the user to go sign up for a different service, when `codex` is a
     drop-in that uses the key they already have. Alphabetical ordering put
-    `backboard` first until this was fixed.
+    `backboard` first.
     """
     error = am.first_error(am.check_pair("claude", "openai"))
     assert "--agent codex" in error.message

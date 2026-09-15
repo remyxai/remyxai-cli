@@ -110,7 +110,15 @@ def main() -> int:
         print(f"could not read {args.origin}: {exc}", file=sys.stderr)
         return 2
 
-    rendered = render(raw, args.origin)
+    # The header records provenance, not a filesystem path: a local checkout
+    # is labelled by what it is a checkout *of*, so the generated module reads
+    # the same whoever regenerates it and from wherever.
+    origin_label = (
+        args.origin
+        if args.origin.startswith(("http://", "https://"))
+        else "remyxai/outrider — docs/agent-matrix.json (local checkout)"
+    )
+    rendered = render(raw, origin_label)
     current = TARGET.read_text(encoding="utf-8") if TARGET.exists() else ""
 
     if args.check:
