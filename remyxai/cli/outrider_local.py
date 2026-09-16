@@ -534,9 +534,9 @@ on:
         options:
 {agent_options}
       model:
-        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.3, kimi-k3). Use the id your provider lists. Empty = the agent picks its own default.'
+        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.3, kimi-k3). Use the id your provider lists. Empty keeps this install default while the provider is unchanged, and lets the new vendor pick its own when you switch providers.'
         required: false
-        default: '{model}'
+        default: ''
       base-url:
         description: 'Optional Anthropic-compatible endpoint (self-hosted model, litellm proxy, vLLM Anthropic shim, on-prem gateway). Overrides the per-provider default when set. Empty = provider default.'
         required: false
@@ -606,7 +606,11 @@ jobs:
           # either backend axis per-dispatch.
           agent: ${{{{ inputs.agent }}}}
           provider: ${{{{ inputs.provider }}}}
-          model: ${{{{ inputs.model }}}}
+          # The baked model applies only while the run is on the baked
+          # provider: carrying a model id across a provider switch is the
+          # most common misconfiguration there is, and it fails as "that
+          # model may not exist" a minute into the run.
+          model: ${{{{ inputs.model || (inputs.provider == '{backend}' && '{model}' || '') }}}}
           model-base-url: ${{{{ inputs.base-url }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
           # Dispatch override first, install default second. `trigger

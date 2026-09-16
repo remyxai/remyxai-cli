@@ -1581,11 +1581,11 @@ def handle_outrider_trigger(
         if problem.is_error and agent:
             raise click.UsageError(problem.message)
         if problem.is_error:
-            click.secho(
-                f"⚠ {problem.message} This install may run a different agent "
-                f"— pass --agent to check the pair before dispatching.",
-                fg="yellow",
-            )
+            # Deferred, not waived: an omitted --agent means "whatever this
+            # install runs", which is a fact about the repo and is checked
+            # once the repo is resolved (see below). Judging it against the
+            # action's empty-input default here refused dispatches that were
+            # correct for a codex install.
             continue
         click.secho(f"⚠ {problem.message}", fg="yellow")
     lead = _resolve_lead_content(lead_content, lead_content_file)
@@ -1670,6 +1670,32 @@ def handle_outrider_trigger(
             f"drop the ones the workflow's own defaults already cover.",
             fg="yellow",
         )
+
+    # The pair check the command boundary had to defer: with no --agent, the
+    # agent is whatever the installed workflow bakes, so read it and judge the
+    # pair against that. Skipping this waved through `--provider openai` on
+    # an install whose agent speaks the other API family — which dispatched,
+    # ran, and failed on "that model may not exist", having spent the run to
+    # find out.
+    if provider and not agent:
+        installed = _provisioned_agent(resolved_repo, ref=branch)
+        if installed:
+            problem = agent_matrix.first_error(
+                agent_matrix.check_pair(installed, provider, model or "")
+            )
+            if problem:
+                raise click.UsageError(
+                    f"{resolved_repo} runs agent={installed}, and {problem.message} "
+                    f"Pass --agent to dispatch a different one, if the repo's "
+                    f"workflow declares the input."
+                )
+        else:
+            click.secho(
+                f"⚠ could not read {resolved_repo}'s installed agent, so the "
+                f"provider pair was not checked. If the run fails on an "
+                f"unrecognised model id, that is why.",
+                fg="yellow",
+            )
 
     # A pending run means this dispatch cancels it (static concurrency group).
     _warn_or_wait_for_queue(resolved_repo, wait_for_slot)

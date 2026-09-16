@@ -63,7 +63,9 @@ def test_render_forwards_provider_model_and_base_url_to_action():
     `base-url` overrides the provider default (self-hosted / on-prem)."""
     wf = outrider_local._render_local_workflow("uuid")
     assert "provider: ${{ inputs.provider }}" in wf
-    assert "model: ${{ inputs.model }}" in wf
+    # The baked model is scoped to the baked provider — see
+    # test_the_baked_model_does_not_survive_a_provider_switch.
+    assert "model: ${{ inputs.model || (inputs.provider ==" in wf
     assert "model-base-url: ${{ inputs.base-url }}" in wf
 
 
@@ -174,6 +176,10 @@ def test_render_forwards_every_declared_input_to_the_action():
     forwarded = {"base-url": "model-base-url"}
     for name in declared:
         target = forwarded.get(name, name)
+        if name == "model":
+            # Scoped to the baked provider rather than forwarded bare.
+            assert "model: ${{ inputs.model || (inputs.provider ==" in text
+            continue
         if name == "claude-timeout":
             # Forwarded with the install's own budget as the fallback, so an
             # omitted override does not blank the timeout.
@@ -1146,7 +1152,9 @@ def test_a_single_file_install_can_pin_its_model(monkeypatch):
         "--model", "gpt-5.4-mini", "--dry-run", "--yes",
     ])
     assert result.exit_code == 0, result.output
-    assert "default: 'gpt-5.4-mini'" in result.output
+    # Pinned in the `with:` block rather than as the input default, so a
+    # dispatch that switches provider does not carry it along.
+    assert "&& 'gpt-5.4-mini'" in result.output
     # And naming one silences the no-default-model advisory.
     assert "has no default model" not in result.output
 
@@ -1329,3 +1337,20 @@ def test_the_dispatch_timeout_reaches_the_action(monkeypatch):
     on = wf.get("on") or wf.get(True)
     assert "claude-timeout" in on["workflow_dispatch"]["inputs"]
     assert "inputs.claude-timeout ||" in wf["jobs"]["recommend"]["steps"][0]["with"]["claude-timeout"]
+
+
+def test_the_baked_model_does_not_survive_a_provider_switch():
+    """A model id belongs to the provider that serves it. Baking it as the
+    input's default meant a dispatch that changed only `provider` still sent
+    the previous vendor's id — which fails a minute into the run as "that
+    model may not exist", the most common misconfiguration there is."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow(
+        "uuid", backend="openai", agent="codex", model="gpt-5.4-mini",
+    )
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    assert on["workflow_dispatch"]["inputs"]["model"]["default"] == ""
+    forwarded = wf["jobs"]["recommend"]["steps"][0]["with"]["model"]
+    assert "inputs.provider == 'openai'" in forwarded
+    assert "'gpt-5.4-mini'" in forwarded

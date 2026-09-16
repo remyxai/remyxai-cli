@@ -1137,10 +1137,12 @@ def test_a_dropped_agent_never_retries_into_a_pair_the_cli_refuses(monkeypatch):
     assert len(calls) == 1, "the pruned retry must not have gone out"
 
 
-def test_an_unnamed_agent_does_not_reject_a_providers_own_install(monkeypatch):
-    """An omitted --agent means "whatever this install runs". A workflow from
-    `setup-local --agent codex` defaults to codex, so validating against
-    Claude Code refused a dispatch that was correct for that repo."""
+def test_an_unnamed_agent_is_judged_against_the_installed_one(monkeypatch):
+    """An omitted --agent means "whatever this install runs", which is a fact
+    about the repo. Judging it against the action's empty-input default
+    refused dispatches that were correct for a codex install; waiving the
+    check instead let `--provider openai` through on a Claude Code install,
+    which dispatched, ran, and failed on an unrecognised model id."""
     calls = []
     monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
                         lambda r: True)
@@ -1152,11 +1154,57 @@ def test_an_unnamed_agent_does_not_reject_a_providers_own_install(monkeypatch):
     monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
                         lambda r, sleep=None: None)
 
+    monkeypatch.setattr(outrider_actions, "_provisioned_agent",
+                        lambda repo, ref=None: "codex")
     result = CliRunner().invoke(cli, [
         "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
         "--provider", "openai", "--model", "gpt-5.4-mini",
     ])
     assert result.exit_code == 0, result.output
     assert calls and calls[0]["provider"] == "openai"
-    # Still says something — it just does not pretend to know the agent.
-    assert "pass --agent" in result.output
+
+
+def test_an_unnamed_agent_still_catches_a_pair_the_install_cannot_run(monkeypatch):
+    """The other half: the install runs Claude Code and the caller asks for
+    an OpenAI model. That dispatched and burned a run before this check."""
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_provisioned_agent",
+                        lambda repo, ref=None: "claude")
+    dispatched = []
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider",
+                        lambda repo, branch, inputs: (dispatched.append(inputs), (True, ""))[1])
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code != 0
+    assert "runs agent=claude" in result.output
+    assert not dispatched, "must not spend a run to discover the mismatch"
+
+
+def test_an_unreadable_install_warns_rather_than_guessing(monkeypatch):
+    """A private repo, or a setup PR not merged yet. Saying nothing would be
+    the silent-substitution failure; refusing would block a valid dispatch."""
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_provisioned_agent",
+                        lambda repo, ref=None: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider",
+                        lambda repo, branch, inputs: (True, ""))
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--provider", "openai",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "could not read" in result.output
