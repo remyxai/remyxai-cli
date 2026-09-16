@@ -859,6 +859,17 @@ def handle_outrider_init(
         )
         if problem:
             raise click.UsageError(problem.message)
+        # And the same model requirement `setup-local` enforces. The engine
+        # rejects a modelless router install too, so this only saves a round
+        # trip — but it means both install paths refuse the same things for
+        # the same reasons, rather than one deferring to a 400.
+        if agent_matrix.is_native_router(agent) and not (model or "").strip():
+            raise click.UsageError(
+                f"--agent {agent_matrix.resolve_agent(agent)} needs --model: "
+                f"it addresses models as <provider>/<model> and has no "
+                f"default. Pass the bare id for your provider — the action "
+                f"composes the qualified form."
+            )
 
     if interest_id and auto_interest:
         raise click.UsageError(

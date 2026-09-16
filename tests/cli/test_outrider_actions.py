@@ -531,3 +531,21 @@ def test_a_workflow_from_before_the_axis_reads_as_claude(monkeypatch):
         lambda *a, **k: _b64.b64encode(body.encode()).decode(),
     )
     assert outrider_actions._provisioned_agent("owner/repo") == "claude"
+
+
+def test_init_refuses_a_router_without_a_model():
+    """Both install paths refuse the same things for the same reasons.
+    `setup-local` already did; `init` deferred to the engine's 400, which is
+    correct but a round trip and a different error surface."""
+    import click
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "init", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "backboard", "--dry-run",
+    ])
+    assert result.exit_code != 0
+    assert "needs --model" in result.output
