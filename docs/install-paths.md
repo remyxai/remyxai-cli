@@ -98,6 +98,20 @@ vendor (`codex` → `openai`, `claude` → `anthropic`). Pass `--backend` to rou
 elsewhere — an impossible pair such as `--agent codex --backend anthropic` is
 refused before anything is written, with the working agent named.
 
+Backboard needs `--model` named with it: it addresses models as
+`<provider>/<model>` and has no default of its own, so an install without one
+is refused rather than written:
+
+```bash
+remyxai outrider setup-local --repo owner/name --auto-interest \
+  --agent backboard --backend openrouter --model z-ai/glm-5.3
+```
+
+The model becomes the install's default, scoped to the backend you named it
+for. A dispatch that switches `provider` without naming a model lets the new
+vendor pick its own default rather than carrying the previous vendor's id
+across.
+
 The generated workflow declares `agent` as a dispatch input too, so a single install can switch agents per run — provided the secret that pair needs is on the repo. That is always exactly one key, and never an agent-specific one for Claude Code or Codex: the action derives the agent's credential from the provider's (`OPENAI_API_KEY` for `codex` + `openai`). Backboard is the one agent with its own key (`BACKBOARD_API_KEY`), because it is the provider relationship — it resolves models against its own catalogue.
 
 Engine-side `outrider init --no-cron` is not yet supported; for now, prefer `setup-local --no-cron` if you need that knob.

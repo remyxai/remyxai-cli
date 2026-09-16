@@ -201,6 +201,8 @@ Inputs the installed workflow doesn't declare are dropped and the dispatch retri
 remyxai outrider init --repo owner/name --interest <uuid> --force
 ```
 
+`--agent` is checked against `--provider` before the dispatch goes out. Omit it and the check still runs, against the agent the installed workflow bakes rather than the action's default, so a provider that install cannot speak is refused here. An unreadable workflow (private repo, unmerged setup PR) warns and dispatches.
+
 GitHub documents 10 as the maximum number of `workflow_dispatch` inputs. It is not enforced at dispatch time — a larger set is accepted in practice — so the CLI notes an over-full combination and dispatches it anyway rather than refusing a run GitHub would have accepted.
 
 
