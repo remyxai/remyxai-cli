@@ -293,7 +293,7 @@ def test_trigger_forwards_claude_timeout_when_set(monkeypatch, capsys):
     # input values are strings on the wire.
     assert captured["inputs"]["claude-timeout"] == "1800"
     out = capsys.readouterr().out
-    assert "claude-timeout: 1800s" in out
+    assert "agent-timeout:  1800s" in out
 
 
 def test_trigger_omits_claude_timeout_when_unset(monkeypatch):
@@ -355,7 +355,7 @@ def test_cli_claude_timeout_flag_accepted_and_dispatched(monkeypatch):
     ])
     assert result.exit_code == 0, result.output
     assert captured["inputs"]["claude-timeout"] == "2700"
-    assert "claude-timeout: 2700s" in result.output
+    assert "agent-timeout:  2700s" in result.output
 
 
 def test_cli_claude_timeout_must_be_integer():
@@ -664,17 +664,22 @@ def test_trigger_rejects_oversized_lead_content():
         )
 
 
-def test_trigger_rejects_more_inputs_than_github_accepts(monkeypatch):
-    _dispatch_capture(monkeypatch)
-    with pytest.raises(click.UsageError, match="at most 10"):
-        outrider_actions.handle_outrider_trigger(
-            repo="owner/name", search_method=None, pin_arxiv="2402.02347v3",
-            interest_id="6a730cc4-010c-49ce-9c7f-6d9c59431739", ref=None,
-            claude_timeout=1800, provider="zai", model="glm-5.2",
-            mode="recommend", publish="pr", start_from_ref="b",
-            lead_content="ctx", staged_synthesis=True,
-            fidelity_policy="advisory",
-        )
+def test_trigger_notes_but_does_not_block_a_large_input_set(monkeypatch, capsys):
+    """The 10-input maximum is documented, not enforced at dispatch time —
+    measured directly, GitHub accepted a dispatch carrying 11. Refusing one
+    it would have run turns a note into a dead end, so this warns and
+    proceeds."""
+    captured = _dispatch_capture(monkeypatch)
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv="2402.02347v3",
+        interest_id="6a730cc4-010c-49ce-9c7f-6d9c59431739", ref=None,
+        claude_timeout=1800, provider="zai", model="glm-5.2",
+        mode="recommend", publish="pr", start_from_ref="b",
+        lead_content="ctx", staged_synthesis=True,
+        fidelity_policy="advisory",
+    )
+    assert "maximum of 10" in capsys.readouterr().out
+    assert captured["inputs"], "the dispatch should still have gone out"
 
 
 def test_cli_refinement_flags_reach_the_dispatch(monkeypatch, tmp_path):
@@ -944,3 +949,262 @@ def test_cli_publish_rejects_unknown_value(monkeypatch):
     ])
     assert result.exit_code != 0
     assert "publish" in result.output.lower()
+
+
+# ─── the agent axis ────────────────────────────────────────────────────────
+
+
+def _capture_dispatch(monkeypatch):
+    captured = {}
+
+    def fake_dispatch(repo, branch, inputs):
+        captured["inputs"] = inputs
+        return True, ""
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+    return captured
+
+
+def test_agent_reaches_the_dispatch_inputs(monkeypatch):
+    captured = _capture_dispatch(monkeypatch)
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "2410.20305v2",
+        "--agent", "codex", "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["agent"] == "codex"
+    assert "agent:          codex" in result.output
+
+
+def test_agent_timeout_and_claude_timeout_are_the_same_flag(monkeypatch):
+    """`--claude-timeout` is the old name and has to keep working — it is in
+    the surface customers already scripted against."""
+    for flag in ("--agent-timeout", "--claude-timeout"):
+        captured = _capture_dispatch(monkeypatch)
+        result = CliRunner().invoke(cli, [
+            "outrider", "trigger", "--repo", "owner/name",
+            "--pin-arxiv", "2410.20305v2", flag, "1800",
+        ])
+        assert result.exit_code == 0, result.output
+        assert captured["inputs"]["claude-timeout"] == "1800", flag
+
+
+def test_the_timeout_goes_on_the_wire_under_its_old_name(monkeypatch):
+    """Deliberate: the action accepts both spellings, but a workflow
+    installed before the rename declares only `claude-timeout`, and the 422
+    self-heal drops an undeclared input and retries. Sending `agent-timeout`
+    would make the flag silently do nothing on every existing install.
+    """
+    captured = _capture_dispatch(monkeypatch)
+    CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent-timeout", "1200",
+    ])
+    assert "claude-timeout" in captured["inputs"]
+    assert "agent-timeout" not in captured["inputs"]
+
+
+def test_an_impossible_pair_is_rejected_before_dispatching(monkeypatch):
+    """The whole point of client-side validation: no round trip, and the
+    error names the agent that does serve the provider."""
+    captured = _capture_dispatch(monkeypatch)
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "codex", "--provider", "anthropic",
+    ])
+    assert result.exit_code != 0
+    assert "does not serve" in result.output
+    assert "--agent claude" in result.output
+    assert "inputs" not in captured, "must not dispatch on a rejected pair"
+
+
+def test_an_unknown_agent_warns_but_still_dispatches(monkeypatch):
+    """This CLI ships independently of the action, so an agent it has not
+    heard of may well be one the installed action knows."""
+    captured = _capture_dispatch(monkeypatch)
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "some-future-agent",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "does not know agent" in result.output
+    assert captured["inputs"]["agent"] == "some-future-agent"
+
+
+def test_a_dropped_agent_input_is_called_out_loudly(monkeypatch):
+    """The 422 self-heal drops undeclared inputs and retries, so dispatching
+    `--agent codex` at a workflow installed before that input existed runs
+    Claude Code instead — silently, having spent real tokens. The generic
+    "doesn't declare" warning undersells that, because every other dropped
+    input falls back to something close to what was asked for.
+    """
+    calls = []
+
+    def fake_dispatch(repo, branch, inputs):
+        calls.append(inputs)
+        if len(calls) == 1:
+            return False, 'HTTP 422: Unexpected inputs provided: ["agent"]'
+        return True, ""
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "codex",
+    ])
+    assert result.exit_code == 0, result.output
+    # It retried without `agent` …
+    assert "agent" not in calls[1]
+    # … and said so in terms that name the actual consequence. It does not
+    # claim which agent ran: an install written by `setup-local --agent
+    # backboard` defaults to backboard, so "you got Claude Code" would be a
+    # guess dressed as a fact.
+    assert "not 'codex'" in result.output
+    assert "workflow's own agent" in result.output
+
+
+def test_asking_for_the_default_agent_is_not_a_substitution_alarm(monkeypatch):
+    """The red alarm means "your run executed a different agent than you
+    asked for". Firing it for `--agent claude` on a workflow that predates
+    the input announced a substitution that did not happen, and prescribed a
+    re-provision that would change nothing."""
+    calls = []
+
+    def fake_dispatch(repo, branch, inputs):
+        calls.append(dict(inputs))
+        if len(calls) == 1:
+            return False, 'HTTP 422: Unexpected inputs provided: ["agent"]'
+        return True, ""
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--pin-arxiv", "x", "--agent", "claude",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "workflow's own agent" not in result.output
+
+
+def test_a_dropped_agent_never_retries_into_a_pair_the_cli_refuses(monkeypatch):
+    """Dropping `agent` leaves `provider` behind, so a codex+openai dispatch
+    retried as a bare openai one — which runs on the install's own agent and,
+    if that is Claude Code, is the family mismatch this CLI refuses at the
+    command boundary. Burning a run to discover that is worse than stopping."""
+    calls = []
+
+    def fake_dispatch(repo, branch, inputs):
+        calls.append(dict(inputs))
+        return False, 'HTTP 422: Unexpected inputs provided: ["agent"]'
+
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider", fake_dispatch)
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--agent", "codex", "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code != 0
+    assert "not retrying without `agent`" in result.output
+    assert len(calls) == 1, "the pruned retry must not have gone out"
+
+
+def test_an_unnamed_agent_is_judged_against_the_installed_one(monkeypatch):
+    """An omitted --agent means "whatever this install runs", which is a fact
+    about the repo. Judging it against the action's empty-input default
+    refused dispatches that were correct for a codex install; waiving the
+    check instead let `--provider openai` through on a Claude Code install,
+    which dispatched, ran, and failed on an unrecognised model id."""
+    calls = []
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider",
+                        lambda repo, branch, inputs: (calls.append(dict(inputs)), (True, ""))[1])
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    monkeypatch.setattr(outrider_actions, "_provisioned_agent",
+                        lambda repo, ref=None: "codex")
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code == 0, result.output
+    assert calls and calls[0]["provider"] == "openai"
+
+
+def test_an_unnamed_agent_still_catches_a_pair_the_install_cannot_run(monkeypatch):
+    """The other half: the install runs Claude Code and the caller asks for
+    an OpenAI model. That dispatched and burned a run before this check."""
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_provisioned_agent",
+                        lambda repo, ref=None: "claude")
+    dispatched = []
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider",
+                        lambda repo, branch, inputs: (dispatched.append(inputs), (True, ""))[1])
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--provider", "openai", "--model", "gpt-5.4-mini",
+    ])
+    assert result.exit_code != 0
+    assert "runs agent=claude" in result.output
+    assert not dispatched, "must not spend a run to discover the mismatch"
+
+
+def test_an_unreadable_install_warns_rather_than_guessing(monkeypatch):
+    """A private repo, or a setup PR not merged yet. Saying nothing would be
+    the silent-substitution failure; refusing would block a valid dispatch."""
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda r: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch", lambda r: "main")
+    monkeypatch.setattr(outrider_actions, "_warn_or_wait_for_queue",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(outrider_actions, "_provisioned_agent",
+                        lambda repo, ref=None: None)
+    monkeypatch.setattr(outrider_actions, "_gh_dispatch_outrider",
+                        lambda repo, branch, inputs: (True, ""))
+    monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
+                        lambda r, sleep=None: None)
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--pin-arxiv", "x",
+        "--provider", "openai",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "could not read" in result.output

@@ -315,7 +315,7 @@ def handle_stats(output_format: str = "text"):
             return
         
         # The endpoint returns assets_*, not papers_* — reading the wrong keys
-        # printed 0 for every count regardless of the catalog size (REMYX-286).
+        # printed 0 for every count regardless of the catalog size.
         total = stats.get('total_assets', 0)
         with_docker = stats.get('assets_with_docker', 0)
         without_docker = stats.get('assets_without_docker', 0)

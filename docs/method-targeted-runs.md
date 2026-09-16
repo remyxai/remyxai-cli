@@ -10,7 +10,7 @@ Once [Outrider](https://github.com/remyxai/outrider) is installed on a repo, you
 
 Three modes of specificity, in ascending order of override:
 
-1. **Default (no pin)** — Remyx ranks candidates from the interest-scoped pool + Outrider's audit augments via agentic refine-queries; Claude Code picks the best implementation from the ranked pool.
+1. **Default (no pin)** — Remyx ranks candidates from the interest-scoped pool + Outrider's audit augments via agentic refine-queries; the coding agent picks the best implementation from the ranked pool.
 2. **`--search-method`** — overrides the ranked pool with an engine search on your query; implements the top hit.
 3. **`--pin-arxiv`** — implements the exact arxiv paper; bypasses ranking entirely.
 
@@ -48,7 +48,7 @@ Searches the engine's research-asset catalog for matches against a method or top
 remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3
 ```
 
-Implements exactly this paper. Bypasses the ranker's pool entirely — Remyx fetches the paper directly from its asset catalog and forwards it to Claude Code for implementation. Works even if the paper isn't in the repo's interest-scoped candidate pool.
+Implements exactly this paper. Bypasses the ranker's pool entirely — Remyx fetches the paper directly from its asset catalog and forwards it to the coding agent for implementation. Works even if the paper isn't in the repo's interest-scoped candidate pool.
 
 Use for:
 - Reproducible re-runs (same paper, same repo, deterministic paper input)
@@ -90,9 +90,10 @@ Outrider is not installed on owner/name. Install it first:
 | `--repo owner/name` | cwd's git remote | Target repo |
 | `--interest <uuid>` | the workflow's configured interest | Override the Research Interest for this run |
 | `--ref <branch>` | the repo's default branch | The git ref to dispatch against |
-| `--provider <name>` | the workflow's default (`anthropic`) | Route Claude Code at a specific model provider for this dispatch (`anthropic`, `zai`, `moonshot`). See [Provider + model routing](#provider--model-routing) below |
-| `--model <name>` | (provider default) | Specific model to request from the provider (e.g. `claude-opus-4-7`, `glm-5.2`, `kimi-k3`). Forwarded as `ANTHROPIC_MODEL` env. Empty = the provider picks |
-| `--claude-timeout <seconds>` | the action's 900s default | Wall-clock ceiling for the Claude Code agent calls on this dispatch (preflight + implementation share the budget). Raise for very large monorepos |
+| `--agent <name>` | the workflow's default (`claude`) | Which coding-agent CLI runs the implementation on this dispatch (`claude`, `codex`, `backboard`). A separate axis from `--provider`. An invalid agent/provider pair is rejected locally, naming the agent that does serve your provider |
+| `--provider <name>` | the workflow's default (`anthropic`) | Route the coding agent at a specific model backend for this dispatch (`anthropic`, `openai`, `zai`, `moonshot`, `openrouter`). See [Provider + model routing](#provider--model-routing) below |
+| `--model <name>` | (provider default) | Specific model to request from the provider (e.g. `claude-opus-4-7`, `glm-5.3`, `kimi-k3`). Forwarded to whichever agent is selected, which sets that agent's own model env var (`ANTHROPIC_MODEL`, `CODEX_MODEL`, …). Empty = the provider picks |
+| `--agent-timeout <seconds>` | the workflow's own default | Wall-clock ceiling for each agent phase on this dispatch (preflight + implementation share the budget). Raise for very large monorepos. Only Claude Code has a round cap, so on `codex` and `backboard` this is the **only** bound on spend. `--claude-timeout` is the old name and still works. Honored by installs whose workflow declares the input; an App-provisioned install bakes its budget per provider instead and the override is reported as dropped |
 | `--wait-for-slot` | off | Wait for a pending run to start instead of dispatching over it. See [Dispatching several runs at one repo](#dispatching-several-runs-at-one-repo) |
 
 Refinement inputs — see [Refinement runs](#refinement-runs-building-on-an-existing-branch):
@@ -108,9 +109,19 @@ Refinement inputs — see [Refinement runs](#refinement-runs-building-on-an-exis
 | `--test-integration-policy <policy>` | the workflow's default | Override the run's test-integration policy |
 
 
-## Provider + model routing
+## Agent + provider + model routing
 
-`--provider` selects the API endpoint (the company); `--model` picks the specific model from that provider. `setup-local`-generated workflows declare both as workflow_dispatch inputs and include a `Configure provider auth` step that picks the right auth env var + sets `ANTHROPIC_MODEL` per dispatch.
+Three things, two axes. `--agent` picks the coding-agent CLI that does the work; `--provider` selects the API endpoint (the company) and `--model` the specific model from it. `setup-local`-generated workflows declare all three as workflow_dispatch inputs, and the action resolves the credential, endpoint and auth style for the pair.
+
+Not every agent/provider pair is valid — an agent speaks one API family and a provider serves one or more — so `trigger` checks locally before spending a dispatch:
+
+```bash
+$ remyxai outrider trigger --agent codex --provider anthropic --pin-arxiv 2402.02347v3
+Error: agent=codex speaks openai-responses, which Anthropic does not serve.
+       Use --agent claude for this provider.
+```
+
+Leave `--agent` unset and the workflow's own default applies, which is Claude Code unless the install chose otherwise.
 
 The only setup besides `outrider setup-local` is putting the alternate provider's API key in the repo's secrets:
 
@@ -119,10 +130,14 @@ The only setup besides `outrider setup-local` is putting the alternate provider'
 remyxai outrider set-provider-secret \
   --repo owner/name --provider zai --key-from ~/zai-key
 
-# 2. Route this run at z.ai's GLM-5.2; scheduled cron runs continue
+# 2. Route this run at z.ai's GLM; scheduled cron runs continue
 #    to use the workflow's default (Anthropic).
 remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
-  --provider zai --model glm-5.2
+  --provider zai --model glm-5.3
+
+# Or switch the agent as well as the model — two independent axes.
+remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
+  --agent codex --provider openai --model gpt-5.4-mini
 
 # Or compare against an older z.ai model on the same paper/repo:
 remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
@@ -186,7 +201,9 @@ Inputs the installed workflow doesn't declare are dropped and the dispatch retri
 remyxai outrider init --repo owner/name --interest <uuid> --force
 ```
 
-GitHub accepts at most 10 inputs per dispatch; the CLI rejects an over-full combination at the command boundary rather than letting GitHub 422 it.
+`--agent` is checked against `--provider` before the dispatch goes out. Omit it and the check still runs, against the agent the installed workflow bakes rather than the action's default, so a provider that install cannot speak is refused here. An unreadable workflow (private repo, unmerged setup PR) warns and dispatches.
+
+GitHub documents 10 as the maximum number of `workflow_dispatch` inputs. It is not enforced at dispatch time — a larger set is accepted in practice — so the CLI notes an over-full combination and dispatches it anyway rather than refusing a run GitHub would have accepted.
 
 
 ## Dispatching several runs at one repo

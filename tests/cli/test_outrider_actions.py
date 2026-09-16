@@ -300,6 +300,7 @@ def test_outrider_init_passes_args_through(mock_handler):
         force=False,
         skip_key_check=False,
         byok=False,
+        agent=None,
         skip_confirm=True,
         dry_run=False,
         no_wait=False,
@@ -424,3 +425,127 @@ def test_no_wait_warms_without_blocking(monkeypatch):
         )
     warm.assert_called_once()
     assert warm.call_args.kwargs.get("wait") is False
+
+
+# ─── the agent axis on init, staged ahead of the engine ────────────────────
+
+
+def test_init_sends_the_agent_in_the_provision_payload():
+    """Staged: the engine renders the workflow, so this is inert until it
+    understands the field. Sending it now means the CLI is ready the moment
+    the engine is, with no second release."""
+    import inspect
+
+    from remyxai.api import interests
+
+    src = inspect.getsource(interests.provision_action)
+    assert 'payload["agent"] = agent' in src
+    assert "agent" in inspect.signature(interests.provision_action).parameters
+
+
+@pytest.mark.parametrize("honored,expect", [
+    (True,  "Agent: Codex"),
+    (False, "does not support the agent axis yet"),
+    (None,  "could not read the provisioned workflow"),
+])
+def test_init_reports_whether_the_agent_actually_took_effect(
+    honored, expect, monkeypatch, capsys
+):
+    """A 200 from provision-action is not evidence the axis took effect.
+
+    The engine's endpoint is a permissive `data.get()` passthrough, so one
+    that predates the agent axis accepts `agent`, returns 200, and renders a
+    Claude-Code workflow. Reporting success on that would tell a user they
+    had provisioned Codex while every run quietly executed Claude Code — the
+    same silent substitution as a dropped dispatch input, and worth a
+    round trip to rule out.
+    """
+    monkeypatch.setattr(
+        outrider_actions, "_provisioned_agent",
+        lambda repo, ref=None: {True: "codex", False: "claude", None: None}[honored],
+    )
+    outrider_actions._report_provisioned_agent("owner/repo", "codex")
+    assert expect in capsys.readouterr().out
+
+
+def test_init_says_nothing_extra_when_the_agent_is_the_default(monkeypatch):
+    """Claude Code is what every engine renders, axis or not — so there is
+    nothing to verify and nothing to say."""
+    calls = []
+    monkeypatch.setattr(
+        outrider_actions, "_provisioned_agent",
+        lambda repo, ref=None: calls.append(repo),
+    )
+    for agent in (None, "", "claude"):
+        outrider_actions._report_provisioned_agent("owner/repo", agent)
+    assert calls == [], "should not have read the workflow at all"
+
+
+def test_the_ignored_agent_message_offers_a_route_that_works_today():
+    """A dead end is not a remedy: setup-local carries the axis on any
+    engine, so the message names it."""
+    import inspect
+
+    src = inspect.getsource(outrider_actions._report_provisioned_agent)
+    assert "setup-local" in src
+
+
+def test_the_agent_check_compares_the_agent_not_the_plumbing(monkeypatch, capsys):
+    """An engine that renders the axis but ignored the requested value leaves
+    `default: 'claude'` in a file that does forward `inputs.agent`. Checking
+    only that the file forwards an agent passes on exactly the install this
+    is meant to catch."""
+    rendered_but_ignored = """\
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: 'x'
+        type: choice
+        required: false
+        default: 'claude'
+        options:
+          - claude
+      - uses: remyxai/outrider@v1
+        with:
+          agent: ${{ inputs.agent }}
+"""
+    import base64 as _b64
+    monkeypatch.setattr(
+        outrider_actions.subprocess, "check_output",
+        lambda *a, **k: _b64.b64encode(rendered_but_ignored.encode()).decode(),
+    )
+    assert outrider_actions._provisioned_agent("owner/repo") == "claude"
+    outrider_actions._report_provisioned_agent("owner/repo", "codex")
+    out = capsys.readouterr().out
+    assert "Agent: Codex" not in out, "must not report success on an ignored axis"
+
+
+def test_a_workflow_from_before_the_axis_reads_as_claude(monkeypatch):
+    """No agent input at all is not "unknown" — it is Claude Code, which is
+    what those installs run."""
+    import base64 as _b64
+    body = "jobs:\n  recommend:\n    steps:\n      - uses: remyxai/outrider@v1\n"
+    monkeypatch.setattr(
+        outrider_actions.subprocess, "check_output",
+        lambda *a, **k: _b64.b64encode(body.encode()).decode(),
+    )
+    assert outrider_actions._provisioned_agent("owner/repo") == "claude"
+
+
+def test_init_refuses_a_router_without_a_model():
+    """Both install paths refuse the same things for the same reasons.
+    `setup-local` already did; `init` deferred to the engine's 400, which is
+    correct but a round trip and a different error surface."""
+    import click
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "init", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "backboard", "--dry-run",
+    ])
+    assert result.exit_code != 0
+    assert "needs --model" in result.output

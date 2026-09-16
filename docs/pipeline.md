@@ -21,7 +21,7 @@ When Outrider fires on a repo, it runs an **audit pass** that agentically explor
 
 ## Implementation
 
-Once a paper is selected, Outrider clones the target repo and invokes Claude Code with a scoped brief: implement the paper's core contribution as a draft PR, wired into an existing call site, honoring your repo's contribution conventions (extracted from recent merged PRs).
+Once a paper is selected, Outrider clones the target repo and invokes the coding agent with a scoped brief: implement the paper's core contribution as a draft PR, wired into an existing call site, honoring your repo's contribution conventions (extracted from recent merged PRs).
 
 If the paper can't be cleanly scaffolded — no natural integration point, or too large a scope for one PR — Outrider opens a design-discussion Issue instead. The routing decision is **measurement-based**, not aspirational: the coding agent must find a real call site before drafting a PR.
 

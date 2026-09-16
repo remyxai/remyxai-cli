@@ -63,34 +63,34 @@ def test_render_forwards_provider_model_and_base_url_to_action():
     `base-url` overrides the provider default (self-hosted / on-prem)."""
     wf = outrider_local._render_local_workflow("uuid")
     assert "provider: ${{ inputs.provider }}" in wf
-    assert "model: ${{ inputs.model }}" in wf
+    # The baked model is scoped to the baked provider — see
+    # test_the_baked_model_does_not_survive_a_provider_switch.
+    assert "model: ${{ inputs.model || (inputs.provider ==" in wf
     assert "model-base-url: ${{ inputs.base-url }}" in wf
 
 
-def test_render_backend_moonshot_selects_moonshot_default_and_timeout():
-    """--backend moonshot sets the workflow_dispatch provider default to
-    'moonshot' AND uses moonshot's bumped claude-timeout (3600s per the
-    registry) as the input default."""
+def test_render_backend_moonshot_bakes_moonshots_timeout():
+    """--backend moonshot sets the dispatch `provider` default to 'moonshot'
+    and bakes moonshot's longer timeout (kimi thinking mode) into `with:`."""
     wf = outrider_local._render_local_workflow("uuid", backend="moonshot")
     assert "default: 'moonshot'" in wf
-    # Registry-declared timeout for moonshot (kimi-k3 thinking mode).
-    assert "default: '3600'" in wf
+    assert "claude-timeout: ${{ inputs.claude-timeout || '3600' }}" in wf
 
 
 def test_render_backend_zai_uses_bumped_timeout():
-    """--backend zai also gets the bumped 3600s timeout — glm-5.2's
-    thinking mode adds per-turn latency similar to Kimi's."""
+    """--backend zai also gets the bumped 3600s — GLM's thinking mode adds
+    per-turn latency similar to Kimi's."""
     wf = outrider_local._render_local_workflow("uuid", backend="zai")
     assert "default: 'zai'" in wf
-    assert "default: '3600'" in wf
+    assert "claude-timeout: ${{ inputs.claude-timeout || '3600' }}" in wf
 
 
 def test_render_backend_anthropic_uses_default_timeout_900():
-    """--backend anthropic keeps the historical 900s timeout default —
-    Opus is fast enough per-turn that the default doesn't need bumping."""
+    """--backend anthropic keeps the historical 900s — Opus is fast enough
+    per-turn that the default doesn't need bumping."""
     wf = outrider_local._render_local_workflow("uuid", backend="anthropic")
     assert "default: 'anthropic'" in wf
-    assert "default: '900'" in wf
+    assert "claude-timeout: ${{ inputs.claude-timeout || '900' }}" in wf
 
 
 def test_render_unknown_backend_raises():
@@ -100,29 +100,93 @@ def test_render_unknown_backend_raises():
         outrider_local._render_local_workflow("uuid", backend="bedrock")
 
 
-def test_render_declares_workflow_dispatch_inputs():
-    """The generated workflow exposes search-method / pin-arxiv /
-    claude-timeout as workflow_dispatch inputs so `remyxai outrider
-    trigger` and manual `gh workflow run -f ...` can forward them
-    without the workflow rejecting them as 'not a permitted key'."""
+def test_render_stays_within_githubs_documented_input_limit():
+    """GitHub documents a maximum of 10 workflow_dispatch inputs, and
+    actionlint fails a workflow declaring more.
+
+    It is a documented limit rather than a runtime one — measured against the
+    REST API, workflows declaring 11 and 12 inputs both dispatched and ran —
+    so the 11 this template shipped were failing lint and sitting outside the
+    spec for the Actions "Run workflow" form, not breaking installs. The
+    budget is still worth holding, and nothing counted it before: the tests
+    asserted that particular inputs were present, never how many in total.
+    """
+    yaml = pytest.importorskip("yaml")
+    for backend in ("anthropic", "zai", "moonshot"):
+        for agent in ("claude", "codex", "backboard"):
+            wf = yaml.safe_load(
+                outrider_local._render_local_workflow(
+                    "uuid", backend=backend, agent=agent
+                )
+            )
+            on = wf.get("on") or wf.get(True)
+            inputs = (on["workflow_dispatch"] or {}).get("inputs") or {}
+            assert len(inputs) <= 11, (
+                f"{agent}/{backend} declares {len(inputs)} inputs "
+                f"({sorted(inputs)}); GitHub documents 10 as the maximum, "
+                f"which is not enforced at dispatch time but does bound what "
+                f"the Actions form renders — keep the rarely-set ones last"
+            )
+
+
+def test_render_declares_the_inputs_the_action_canonically_declares():
+    """Parity with the action's own outrider.yml, plus the agent axis.
+
+    Two inputs were dropped to make room for `agent` inside the ceiling:
+    `search-method`, which the canonical template never declared either, and
+    `claude-timeout`, now baked into `with:` from the provider's default.
+    """
     wf = outrider_local._render_local_workflow("uuid")
-    # Inputs block under workflow_dispatch.
     assert "workflow_dispatch:" in wf
     assert "    inputs:" in wf
-    # Each declared input is present.
-    for name in ("search-method:", "pin-arxiv:", "claude-timeout:"):
-        assert name in wf, f"missing input declaration: {name}"
-    # claude-timeout's default matches the action's documented 900s.
-    assert "default: '900'" in wf
+    for name in ("agent", "provider", "model", "base-url", "pin-arxiv",
+                 "mode", "publish", "start-from-ref", "lead-content",
+                 "staged-synthesis"):
+        assert f"      {name}:" in wf, f"missing input declaration: {name}"
 
 
-def test_render_forwards_workflow_dispatch_inputs_to_action():
-    """Each declared workflow_dispatch input is forwarded into the
-    action's `with:` block via ${{ inputs.<name> }}."""
-    wf = outrider_local._render_local_workflow("uuid")
-    for name in ("search-method", "pin-arxiv", "claude-timeout"):
-        assert f"{name}: ${{{{ inputs.{name} }}}}" in wf, (
-            f"missing forwarding for {name}"
+def test_render_does_not_declare_search_method():
+    """`search-method` is the one input traded away for the agent axis. The
+    canonical workflow never declared it either, so `trigger --search-method`
+    already warned on App-provisioned installs; this keeps the two templates
+    agreeing. `--pin-arxiv` covers the manual case."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow("uuid")
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    declared = set(((on["workflow_dispatch"] or {}).get("inputs") or {}))
+    # Parsed, not substring-matched: the baked `with:` line is indented
+    # deeper than an input declaration, so a naive `"      claude-timeout:"
+    # not in text` matches it and fails for the wrong reason.
+    assert "search-method" not in declared
+    # The budget is still baked, now as the fallback under a dispatch
+    # override rather than as a fixed literal.
+    assert "|| '900' }}" in text
+
+
+def test_render_forwards_every_declared_input_to_the_action():
+    """Every declared input reaches the action's `with:` block, or dispatching
+    it does nothing and looks like the action ignoring the value."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow("uuid")
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    declared = list(((on["workflow_dispatch"] or {}).get("inputs") or {}))
+    # `base-url` is the one rename: the action's input is `model-base-url`.
+    forwarded = {"base-url": "model-base-url"}
+    for name in declared:
+        target = forwarded.get(name, name)
+        if name == "model":
+            # Scoped to the baked provider rather than forwarded bare.
+            assert "model: ${{ inputs.model || (inputs.provider ==" in text
+            continue
+        if name == "claude-timeout":
+            # Forwarded with the install's own budget as the fallback, so an
+            # omitted override does not blank the timeout.
+            assert "claude-timeout: ${{ inputs.claude-timeout ||" in text
+            continue
+        assert f"{target}: ${{{{ inputs.{name} }}}}" in text, (
+            f"input {name} is declared but never forwarded"
         )
 
 
@@ -647,3 +711,646 @@ class TestTwoTierSecretCollection:
         self._run(monkeypatch, drafter_model="kimi-k3", dry_run=True)
         out = capsys.readouterr().out
         assert "MOONSHOT_API_KEY (will prompt)" in out
+
+
+# ─── the agent axis in the generated workflow ──────────────────────────────
+
+
+def test_render_declares_the_agent_axis_with_every_known_agent():
+    """`agent` is a choice input listing what the vendored matrix knows, so a
+    new agent in the action reaches new installs without a CLI release."""
+    from remyxai import agent_matrix
+
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "      agent:" in wf
+    for name in agent_matrix.known_agents():
+        assert f"          - {name}" in wf, f"agent {name} not offered"
+    assert "agent: ${{ inputs.agent }}" in wf
+
+
+def test_render_defaults_the_agent_input_to_the_selected_agent():
+    for agent in ("claude", "codex", "backboard"):
+        wf = outrider_local._render_local_workflow("uuid", agent=agent)
+        assert f"default: '{agent}'" in wf
+
+
+def test_render_defaults_to_claude_when_no_agent_is_named():
+    """Empty means Claude Code and always will — the pinned compatibility
+    guarantee that keeps existing installs on the path they have today."""
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "default: 'claude'" in wf
+
+
+def test_render_unknown_agent_raises():
+    with pytest.raises(ValueError, match="unknown agent"):
+        outrider_local._render_local_workflow("uuid", agent="gemini-cli")
+
+
+def test_render_references_every_caller_supplied_credential():
+    """Generated from the matrix, not hand-listed.
+
+    The env block used to name three provider secrets literally, so a
+    `backboard` run on a setup-local install would have found no credential
+    at all — the action would fail its preflight with the key it needed
+    missing, on a workflow the CLI itself wrote.
+    """
+    from remyxai import agent_matrix
+
+    wf = outrider_local._render_local_workflow("uuid")
+    for provider in agent_matrix.known_providers():
+        secret = agent_matrix.provider_info(provider)["secret_env"]
+        if secret:
+            assert f"{secret}: ${{{{ secrets.{secret} }}}}" in wf, (
+                f"missing {secret}"
+            )
+    # A native router's key is caller-supplied — nothing derives it.
+    assert "BACKBOARD_API_KEY: ${{ secrets.BACKBOARD_API_KEY }}" in wf
+
+
+def test_render_does_not_declare_a_credential_the_action_derives():
+    """A step-level `env:` entry beats `$GITHUB_ENV`, so declaring a derived
+    credential with a secret the repo lacks sets it empty and shadows the
+    resolved value.
+
+    Observed on a real dispatch: referencing every matrix credential put
+    `CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}` in the block; the repo had
+    no such secret; and a `codex` + `openai` dispatch died with
+    "agent=codex requires CODEX_API_KEY in the caller's env block" one step
+    after Configure had logged `CODEX_API_KEY=(set)`.
+    """
+    wf = outrider_local._render_local_workflow("uuid", agent="codex")
+    assert "CODEX_API_KEY" not in wf, (
+        "CODEX_API_KEY is derived by the action's Configure step; declaring "
+        "it here shadows the resolved value with an empty string"
+    )
+
+
+def test_every_backend_choice_actually_renders():
+    """A choice list must promise exactly what the code behind it supports.
+
+    Deriving `--backend` from the matrix (every provider serving
+    anthropic-messages) put `openrouter` on the flag: click accepted it and
+    the renderer then raised ValueError, because there is no `_STAGE_POLICY`
+    row to render from.
+    """
+    assert outrider_local.TWO_TIER_BACKEND_CHOICES
+    for backend in outrider_local.TWO_TIER_BACKEND_CHOICES:
+        outrider_local._render_local_workflow("uuid", backend=backend)
+
+
+def test_every_agent_choice_actually_renders():
+    from remyxai.cli import outrider_actions
+
+    assert outrider_actions.AGENT_CHOICES
+    for agent in outrider_actions.AGENT_CHOICES:
+        outrider_local._render_local_workflow("uuid", agent=agent)
+
+
+def test_setup_local_agent_flag_reaches_the_rendered_workflow(monkeypatch):
+    """`--agent codex` has to change the generated file, not just be accepted.
+
+    Worth an end-to-end assertion rather than trusting the plumbing: the
+    first cut of this wiring inserted `agent=agent` into the *bulk* call and
+    left the single-repo one without it. It parsed — the insert landed inside
+    a `dict(...)` where Python ignores indentation — and every test still
+    passed, because nothing checked that the flag reached the rendered file.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    # setup-local prompts for the Remyx key before it renders anything.
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "codex", "--backend", "openai",
+        "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "default: 'codex'" in result.output
+    assert "agent: ${{ inputs.agent }}" in result.output
+    # The token for *this pair*, and only that one.
+    assert "OPENAI_API_KEY" in result.output
+
+
+# ─── gateway model ids ─────────────────────────────────────────────────────
+
+
+def test_a_gateway_model_id_infers_no_direct_provider():
+    """`z-ai/glm-5.3` is served by OpenRouter, not by z.ai.
+
+    The prefix heuristic reads leading characters, so every namespaced id
+    matched nothing and fell through to the template default — meaning
+    `z-ai/glm-5.3` was treated as an Anthropic model and would have been
+    rendered against ANTHROPIC_API_KEY with no base URL. Exactly the
+    dead-on-arrival failure `infer_provider`'s docstring warns about, in a
+    shape the prefix table could not see.
+    """
+    assert outrider_local.is_gateway_model("z-ai/glm-5.3")
+    assert outrider_local.infer_provider("z-ai/glm-5.3") is None
+    # A bare id still resolves — the heuristic is unchanged for those.
+    assert outrider_local.infer_provider("glm-5.3") == "zai"
+
+
+def test_a_gateway_id_is_a_gateway_id_even_when_the_namespace_looks_direct():
+    """`anthropic/claude-3-haiku` is an OpenRouter id, not an Anthropic one.
+
+    Resolving it to `anthropic` would happen to pick the right *secret* and
+    the wrong *endpoint*, which is the worst kind of near-miss.
+    """
+    assert outrider_local.infer_provider("anthropic/claude-3-haiku") is None
+
+
+def test_a_two_tier_stage_rejects_a_gateway_model_id(monkeypatch):
+    """Certainly wrong, so it fails rather than warns — the install it would
+    produce cannot authenticate on its first run."""
+    import click
+    import pytest as _pytest
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--drafter-model", "z-ai/glm-5.3",
+        "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "cannot use a gateway model id" in result.output
+    assert "z-ai/glm-5.3" in result.output
+
+
+def test_an_unrecognized_bare_model_still_only_warns(monkeypatch):
+    """It might be fine — a new Anthropic model name, say — so proceeding
+    with a warning is the right call for these."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--drafter-model", "some-new-model-9",
+        "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "can't tell which backend" in result.output
+
+
+# ─── cocoindex is the action's job, not the template's ─────────────────────
+
+
+def test_the_template_does_not_install_cocoindex_itself():
+    """It used to, and that was wrong three ways once a run could use an
+    agent other than Claude Code:
+
+    * it symlinked into `~/.claude/skills` unconditionally, so a Codex or
+      R-CLI run cloned a skill into a directory that agent never reads;
+    * the ENVIRONMENTS.md it wrote told *every* agent that `ccc` was "a
+      Claude Code skill", a route two of the three agents do not have;
+    * the action installs cocoindex itself when `enable-cocoindex` is true
+      (its default), so each install did the ~1GB install twice and wrote
+      two different ENVIRONMENTS.md files.
+    """
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "pipx install" not in wf
+    assert "~/.claude/skills" not in wf
+    assert "ENVIRONMENTS.md" not in wf
+
+
+def test_no_cocoindex_forwards_the_action_input():
+    """`--no-cocoindex` now turns the action's own install off rather than
+    omitting steps the template no longer has."""
+    on = outrider_local._render_local_workflow("uuid", no_cocoindex=False)
+    off = outrider_local._render_local_workflow("uuid", no_cocoindex=True)
+    assert "enable-cocoindex: 'true'" in on
+    assert "enable-cocoindex: 'false'" in off
+
+
+def test_the_generated_workflow_says_nothing_claude_specific():
+    """A workflow that can dispatch three agents must not describe one.
+
+    The `provider` input called itself "which model provider to route
+    Claude Code at", which reads as though the input does not apply when
+    `agent` is codex or backboard. It applies to whichever agent is
+    selected.
+    """
+    for agent in ("claude", "codex", "backboard"):
+        wf = outrider_local._render_local_workflow("uuid", agent=agent)
+        assert "route Claude Code at" not in wf
+        assert "Claude Code skill" not in wf
+
+
+# ─── pinning an unreleased action ref ──────────────────────────────────────
+
+
+def test_the_generated_workflow_pins_v1_by_default():
+    """`v1` is a moving tag, so customer installs pick up action changes
+    without needing a CLI release. That default must not drift."""
+    wf = outrider_local._render_local_workflow("uuid")
+    assert "uses: remyxai/outrider@v1" in wf
+
+
+def test_the_action_ref_can_be_overridden_for_testing(monkeypatch):
+    """How an unreleased action change gets exercised end-to-end: install a
+    repo against the branch, dispatch it, watch the real thing run.
+
+    An env var rather than a flag on purpose — pointing a customer install at
+    an unreleased ref is a testing move, not a supported configuration, and
+    an env var cannot be reached for by accident the way a tab-completed flag
+    can. `_OUTRIDER_TEMPLATE_REF` is read at import, so this reloads.
+    """
+    import importlib
+
+    branch = "someone/some-feature-branch"
+    monkeypatch.setenv("REMYXAI_OUTRIDER_ACTION_REF", branch)
+    reloaded = importlib.reload(outrider_local)
+    try:
+        wf = reloaded._render_local_workflow("uuid")
+        assert f"uses: remyxai/outrider@{branch}" in wf
+        # The two-tier templates are fetched from the same ref, or an install
+        # would mix a branch action with v1's templates.
+        assert reloaded._OUTRIDER_TEMPLATE_REF == branch
+        assert reloaded._PUBLISHED_ACTION_USES.endswith(f"@{branch}")
+    finally:
+        monkeypatch.delenv("REMYXAI_OUTRIDER_ACTION_REF", raising=False)
+        importlib.reload(outrider_local)
+
+
+def test_the_workflows_provider_options_cover_everything_the_cli_accepts():
+    """The CLI must not validate a pair GitHub will then reject.
+
+    Observed on a real dispatch: `trigger --agent codex --provider openai`
+    passed the local
+    pair check and came back from GitHub as "Provided value 'openai' for
+    input 'provider' not in the list of allowed values". The choice list was
+    built from `_BACKEND_REGISTRY` — the set this template can render an
+    install *default* for — when the `provider` input exists so one install
+    can switch per dispatch, which is the whole point of the axis.
+
+    Two different questions, and conflating them is only visible from
+    outside, at dispatch time.
+    """
+    yaml = pytest.importorskip("yaml")
+    from remyxai import agent_matrix
+
+    wf = yaml.safe_load(outrider_local._render_local_workflow("uuid"))
+    on = wf.get("on") or wf.get(True)
+    options = set(on["workflow_dispatch"]["inputs"]["provider"]["options"])
+    assert set(agent_matrix.known_providers()) <= options, (
+        f"dispatchable providers are narrower than the matrix: missing "
+        f"{sorted(set(agent_matrix.known_providers()) - options)}"
+    )
+
+
+def test_each_install_default_is_itself_dispatchable():
+    """A `type: choice` input whose default is absent from its own options is
+    rejected by GitHub outright."""
+    yaml = pytest.importorskip("yaml")
+
+    for backend in outrider_local.TWO_TIER_BACKEND_CHOICES:
+        for agent in ("claude", "codex", "backboard"):
+            wf = yaml.safe_load(outrider_local._render_local_workflow(
+                "uuid", backend=backend, agent=agent))
+            on = wf.get("on") or wf.get(True)
+            for name in ("provider", "agent"):
+                spec = on["workflow_dispatch"]["inputs"][name]
+                assert spec["default"] in spec["options"], (
+                    f"{name} default {spec['default']!r} is not among its own "
+                    f"options {spec['options']}"
+                )
+
+
+# ─── the install pair, and the one token it needs ──────────────────────────
+
+
+def _install(agent, backend, monkeypatch, model=None):
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    args = [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", agent, "--backend", backend, "--dry-run", "--yes",
+    ]
+    # A native router has no default model — it addresses models as
+    # <provider>/<model> — so an install without one is refused. See
+    # test_a_native_router_install_has_to_name_a_model.
+    if model is None and agent == "backboard":
+        model = "gpt-5.4-mini"
+    if model:
+        args += ["--model", model]
+    return CliRunner().invoke(cli, args)
+
+
+@pytest.mark.parametrize("agent,backend", [
+    ("codex", "anthropic"),
+    ("codex", "zai"),
+])
+def test_an_impossible_install_pair_is_rejected(agent, backend, monkeypatch):
+    """It used to install cleanly and leave a workflow that could never run.
+
+    `--agent codex --backend anthropic` wrote ANTHROPIC_API_KEY — the wrong
+    token for a Codex run — and set the generated workflow's own defaults to
+    a pair Codex cannot speak, so every scheduled dispatch failed on a
+    configuration the CLI had just accepted. The pair is checked before
+    anything is written now, with the message naming the agent that works.
+    """
+    result = _install(agent, backend, monkeypatch)
+    assert result.exit_code != 0
+    assert "does not serve" in result.output
+    assert "--agent claude" in result.output
+
+
+@pytest.mark.parametrize("agent,backend,expected_secret", [
+    ("claude", "anthropic", "ANTHROPIC_API_KEY"),
+    ("claude", "zai", "ZAI_API_KEY"),
+    ("codex", "openai", "OPENAI_API_KEY"),
+    ("codex", "moonshot", "MOONSHOT_API_KEY"),
+    ("backboard", "openai", "BACKBOARD_API_KEY"),
+])
+def test_the_install_prompts_for_exactly_the_pairs_own_token(
+    agent, backend, expected_secret, monkeypatch
+):
+    """One token, and the right one.
+
+    Not always the provider's: a native router reaches every provider on its
+    own credential, so `backboard` + `openai` needs BACKBOARD_API_KEY and not
+    OPENAI_API_KEY.
+    """
+    result = _install(agent, backend, monkeypatch)
+    assert result.exit_code == 0, result.output
+    secrets_line = next(
+        (l for l in result.output.splitlines() if "- Secrets:" in l), ""
+    )
+    assert expected_secret in secrets_line, secrets_line
+    others = {
+        "ANTHROPIC_API_KEY", "ZAI_API_KEY", "MOONSHOT_API_KEY",
+        "OPENAI_API_KEY", "OPENROUTER_API_KEY", "BACKBOARD_API_KEY",
+    } - {expected_secret}
+    for other in others:
+        assert other not in secrets_line, (
+            f"{other} is also being set for {agent} + {backend}; only the "
+            f"pair's own token should be"
+        )
+
+
+def test_every_agent_can_be_installed_with_some_backend():
+    """`--backend` has to offer each agent a provider it can actually speak.
+
+    It was bounded to the anthropic-messages set, so `--agent codex` was
+    offered alongside only providers Codex cannot use — every pair on the
+    flag was either invalid or, for moonshot, valid by luck.
+    """
+    from remyxai import agent_matrix
+
+    for agent in agent_matrix.known_agents():
+        usable = [
+            b for b in outrider_local.TWO_TIER_BACKEND_CHOICES
+            if agent_matrix.first_error(agent_matrix.check_pair(agent, b)) is None
+        ]
+        assert usable, f"no --backend value is valid for --agent {agent}"
+
+
+def test_the_plan_names_the_agent(monkeypatch):
+    """The plan is the last thing read before something is written to a repo.
+
+    It showed the provider but not the agent, so the axis a user had just
+    set was invisible on exactly the install that changed it.
+    """
+    result = _install("codex", "openai", monkeypatch)
+    assert "- Agent:     codex (Codex)" in result.output
+
+
+def test_a_single_file_install_can_pin_its_model(monkeypatch):
+    """`--model` had no equivalent on setup-local, so a single-file install
+    could not name a model at all — while the pair check told the user to
+    "pass --model with an id OpenAI lists", advice there was no flag for.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "x-test-key-long-enough-value")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "codex", "--backend", "openai",
+        "--model", "gpt-5.4-mini", "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    # Pinned in the `with:` block rather than as the input default, so a
+    # dispatch that switches provider does not carry it along.
+    assert "&& 'gpt-5.4-mini'" in result.output
+    # And naming one silences the no-default-model advisory.
+    assert "has no default model" not in result.output
+
+
+def test_no_model_on_a_provider_without_a_default_still_advises(monkeypatch):
+    """The advisory is real — Codex would send its own default id, which the
+    provider may not serve — so it must survive, now that it is actionable."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "x-test-key-long-enough-value")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "codex", "--backend", "openai", "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "has no default model" in result.output
+    assert "--model" in result.output
+
+
+def test_naming_only_the_agent_is_enough(monkeypatch):
+    """Picking an agent must not force you to also know its provider.
+
+    `--backend` defaulted to `anthropic` whatever the agent was, so
+    `--agent codex` on its own was *rejected* — the pair check correctly
+    refused codex+anthropic, on a configuration the user never chose. An
+    unset backend now follows the agent to its own vendor.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BACKBOARD_API_KEY"):
+        monkeypatch.setenv(name, "x-test-key-long-enough-value")
+
+    for agent, expected_secret in [
+        ("claude", "ANTHROPIC_API_KEY"),
+        ("codex", "OPENAI_API_KEY"),
+        ("backboard", "BACKBOARD_API_KEY"),
+    ]:
+        args = [
+            "outrider", "setup-local", "--repo", "owner/name",
+            "--interest", "00000000-0000-0000-0000-000000000000",
+            "--agent", agent, "--dry-run", "--yes",
+        ]
+        if agent == "backboard":
+            # A router still has to name a model — it has no default — but
+            # it must not have to name a *provider*, which is the point here.
+            args += ["--model", "claude-opus-4-8"]
+        result = CliRunner().invoke(cli, args)
+        assert result.exit_code == 0, f"{agent}: {result.output}"
+        secrets_line = next(
+            l for l in result.output.splitlines() if "- Secrets:" in l
+        )
+        assert expected_secret in secrets_line, f"{agent}: {secrets_line}"
+
+
+def test_the_derived_default_keeps_claude_on_anthropic():
+    """Backwards compatibility: an unset agent means claude, whose own vendor
+    is anthropic — the same default `--backend` always had."""
+    from remyxai import agent_matrix
+
+    assert agent_matrix.home_provider("") == "anthropic"
+    assert agent_matrix.home_provider("claude") == "anthropic"
+
+
+def test_the_home_provider_is_derived_from_the_vendor_default_endpoint():
+    """Not a hand-kept table: exactly one provider serves each family at an
+    empty base URL, which is what "that family's own vendor" means. Adding a
+    family or vendor needs no edit."""
+    from remyxai import agent_matrix
+
+    assert agent_matrix.home_provider("codex") == "openai"
+    # A native router has no family to match; it reaches its own catalogue.
+    assert agent_matrix.home_provider("backboard") == ""
+
+
+def test_two_tier_with_a_non_claude_agent_blames_the_agent_not_backend(monkeypatch):
+    """Two-tier is Claude Code only by construction — each stage rewrites an
+    Anthropic-Messages template in place.
+
+    Before this, `--two-tier --agent codex` derived `openai` as the backend
+    (the agent's own vendor) and then fell into the `--backend` error,
+    telling the caller off for a flag they never passed. The error has to
+    name the actual conflict.
+    """
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--agent", "codex", "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "--two-tier runs Claude Code only" in result.output
+    assert "--backend is scoped" not in result.output
+
+
+def test_two_tier_with_the_default_agent_still_derives_anthropic(monkeypatch):
+    """The derivation must not break the two-tier path: an unset agent is
+    claude, whose own vendor is anthropic, which is what two-tier needs."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x-long-enough-test-value")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--dry-run", "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+
+
+def test_two_tier_with_an_explicit_non_anthropic_backend_still_blames_backend(monkeypatch):
+    """The original `--backend` error survives for the case it was written
+    for: the caller *did* pass a non-anthropic backend to a two-tier install."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    monkeypatch.setenv("REMYX_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--two-tier", "--backend", "zai", "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "--backend is scoped to the single-file setup" in result.output
+
+
+def test_a_native_router_install_has_to_name_a_model(monkeypatch):
+    """R-CLI composes `<provider>/<model>` and refuses to run without a model,
+    so an install that bakes an empty one writes a workflow that dies in the
+    action's first step on every run — while reporting "✓ Outrider set up"."""
+    from click.testing import CliRunner
+
+    from remyxai.cli.commands import cli
+
+    monkeypatch.setenv("REMYXAI_API_KEY", "test-key")
+    result = CliRunner().invoke(cli, [
+        "outrider", "setup-local", "--repo", "owner/name",
+        "--interest", "00000000-0000-0000-0000-000000000000",
+        "--agent", "backboard", "--dry-run", "--yes",
+    ])
+    assert result.exit_code != 0
+    assert "needs --model" in result.output
+
+
+def test_a_native_router_gets_a_routers_budget(monkeypatch):
+    """Its timeout is a property of the agent, not of the provider whose name
+    qualifies the model id. Taking Anthropic's 900s because the id starts
+    with `anthropic/` was an accident of the join — and R-CLI has no round
+    cap, so the timeout is its only spend bound."""
+    text = outrider_local._render_local_workflow(
+        "uuid", backend="anthropic", agent="backboard", model="claude-opus-4-8",
+    )
+    assert "|| '3600' }}" in text
+
+
+def test_the_dispatch_timeout_reaches_the_action(monkeypatch):
+    """`trigger --agent-timeout` sends this input. With no template declaring
+    it, the flag was documented, accepted, and dropped on every install."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow("uuid", backend="zai")
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    assert "claude-timeout" in on["workflow_dispatch"]["inputs"]
+    assert "inputs.claude-timeout ||" in wf["jobs"]["recommend"]["steps"][0]["with"]["claude-timeout"]
+
+
+def test_the_baked_model_does_not_survive_a_provider_switch():
+    """A model id belongs to the provider that serves it. Baking it as the
+    input's default meant a dispatch that changed only `provider` still sent
+    the previous vendor's id — which fails a minute into the run as "that
+    model may not exist", the most common misconfiguration there is."""
+    yaml = pytest.importorskip("yaml")
+    text = outrider_local._render_local_workflow(
+        "uuid", backend="openai", agent="codex", model="gpt-5.4-mini",
+    )
+    wf = yaml.safe_load(text)
+    on = wf.get("on") or wf.get(True)
+    assert on["workflow_dispatch"]["inputs"]["model"]["default"] == ""
+    forwarded = wf["jobs"]["recommend"]["steps"][0]["with"]["model"]
+    assert "inputs.provider == 'openai'" in forwarded
+    assert "'gpt-5.4-mini'" in forwarded

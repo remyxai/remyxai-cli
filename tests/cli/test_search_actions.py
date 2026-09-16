@@ -1,6 +1,6 @@
 """Tests for the `remyxai search` display handlers.
 
-Covers the stats key mismatch found while verifying REMYX-286: the handler read
+Covers the stats key mismatch in the display handler: it read
 papers_* keys while the endpoint returns assets_*, so every count printed 0.
 """
 import remyxai.cli.search_actions as sa
@@ -64,7 +64,7 @@ def test_stats_lists_top_categories_by_count(monkeypatch, capsys):
     assert out.index("cs.CV: 600") < out.index("cs.LG: 400")
 
 
-# ─── REMYX-287: --format json on search query / search list ──────────
+# ─── --format json on search query / search list ─────────────────────
 
 import json
 

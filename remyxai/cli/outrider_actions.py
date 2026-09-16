@@ -34,6 +34,7 @@ from typing import NamedTuple, Optional
 
 import click
 
+from remyxai import agent_matrix
 from remyxai.api import BASE_URL, DEFAULT_BASE_URL
 from remyxai.api.interests import (
     get_interest,
@@ -103,11 +104,31 @@ PROVIDER_INTEGRATION_IDS = {
 # option that implements it (commands.outrider_init).
 BYOK_FLAG = "--github-secrets-only"
 
+#: Provider → the GitHub Actions secret the action reads for it.
+#:
+#: Derived from the action's published matrix rather than hand-listed, which
+#: is what let `moonshot` be accepted by `init` and rejected by
+#: `set-provider-secret` once already. Providers that supply their own
+#: endpoint (`custom`) have no conventional secret name and are excluded.
+#:
+#: This is deliberately WIDER than :data:`MODEL_PROVIDERS` above. That one
+#: mirrors the *engine's* integration ids — including the `claude_code` id,
+#: which is an agent name in a model-provider registry — and can only grow
+#: when the engine learns a provider. Setting a repo secret is a plain `gh`
+#: operation with no engine involvement, so it is bounded by what the
+#: *action* understands, not by what the engine can provision.
 _PROVIDER_SECRET_NAMES = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "zai": "ZAI_API_KEY",
-    "moonshot": "MOONSHOT_API_KEY",
+    provider: agent_matrix.provider_info(provider)["secret_env"]
+    for provider in agent_matrix.known_providers()
+    if agent_matrix.provider_info(provider)["secret_env"]
 }
+
+#: The `--provider` choice list for `set-provider-secret`.
+SECRET_PROVIDER_CHOICES = sorted(_PROVIDER_SECRET_NAMES)
+
+#: The `--agent` choice list. From the matrix, so a new agent in the action
+#: becomes selectable without a CLI release.
+AGENT_CHOICES = agent_matrix.known_agents()
 
 INSTALL_POLL_INTERVAL = 5     # seconds between App-install checks
 INSTALL_POLL_TIMEOUT = 300    # stop waiting for the browser install after 5 min
@@ -117,9 +138,13 @@ PROVISION_POLL_TIMEOUT = 300
 # minute or two, but a busy Actions account can hold it much longer.
 QUEUE_POLL_INTERVAL = 15
 QUEUE_POLL_TIMEOUT = 900
-# GitHub's per-dispatch input ceiling (workflow_dispatch accepts at most 10
-# top-level inputs) and a conservative bound on a single input's size — the
-# whole payload has to stay under ~64KB.
+# GitHub *documents* a maximum of 10 workflow_dispatch inputs, and actionlint
+# fails a workflow that declares more. The REST dispatch endpoint does not
+# enforce it: a workflow declaring 11 and then 12 inputs was accepted and ran,
+# as did a dispatch carrying 11 of them. So this is the documented contract,
+# not a runtime rejection — worth saying out loud, never worth blocking a
+# dispatch that GitHub would have accepted. Paired with a conservative bound
+# on a single input's size, since the whole payload must stay under ~64KB.
 GH_MAX_DISPATCH_INPUTS = 10
 LEAD_CONTENT_MAX_CHARS = 60000
 
@@ -814,7 +839,7 @@ def handle_outrider_init(
     single_tier=False, provider=None, model=None,
     drafter_provider=None, drafter_model=None,
     refiner_provider=None, refiner_model=None,
-    force=False, skip_key_check=False, byok=False,
+    force=False, skip_key_check=False, byok=False, agent=None,
 ):
     """Set up Outrider on a repo via the Remyx engine. Called from
     commands.outrider_init.
@@ -824,6 +849,28 @@ def handle_outrider_init(
     Remyx. For customers whose policy forbids giving model-provider keys to a
     third party.
     """
+    # Same pair check `trigger` and `setup-local` run. Without it `init` was
+    # the one door where an impossible combination walked through silently —
+    # harmless only while the engine ignored `agent`, and a bad install the
+    # day it stopped.
+    if agent:
+        problem = agent_matrix.first_error(
+            agent_matrix.check_pair(agent, provider or "", model or "")
+        )
+        if problem:
+            raise click.UsageError(problem.message)
+        # And the same model requirement `setup-local` enforces. The engine
+        # rejects a modelless router install too, so this only saves a round
+        # trip — but it means both install paths refuse the same things for
+        # the same reasons, rather than one deferring to a 400.
+        if agent_matrix.is_native_router(agent) and not (model or "").strip():
+            raise click.UsageError(
+                f"--agent {agent_matrix.resolve_agent(agent)} needs --model: "
+                f"it addresses models as <provider>/<model> and has no "
+                f"default. Pass the bare id for your provider — the action "
+                f"composes the qualified form."
+            )
+
     if interest_id and auto_interest:
         raise click.UsageError(
             "--interest and --auto-interest are mutually exclusive."
@@ -999,6 +1046,10 @@ def handle_outrider_init(
         model_provider=PROVIDER_INTEGRATION_IDS.get(key_plan.preferred),
         sealed_provider_secrets=sealed_payload,
         api_key=api_key,
+        # Staged ahead of the engine. See the verification below: an engine
+        # that predates the agent axis accepts this and ignores it, so a 200
+        # is not evidence the axis took effect.
+        agent=agent,
     )
     task_id = resp.get("task_id")
     if not task_id:
@@ -1033,6 +1084,7 @@ def handle_outrider_init(
         )
     else:
         click.echo("  Next: merge the setup PR to activate Outrider.")
+    _report_provisioned_agent(resolved_repo, agent)
     for provider, secret_name, _ in key_plan.sealed:
         click.echo(
             f"  Repo secret {secret_name}: set from your sealed key "
@@ -1169,6 +1221,102 @@ def _gh_default_branch(repo: str) -> Optional[str]:
     return out or None
 
 
+def _report_provisioned_agent(repo: str, agent: Optional[str]) -> None:
+    """Say what agent the install will actually run, and flag a mismatch.
+
+    `init` provisions server-side, so whether the agent axis took effect is
+    the engine's answer, not this CLI's. The engine's provision endpoint is a
+    permissive `data.get()` passthrough, so one that predates the axis
+    returns 200 and renders a Claude-Code workflow — reporting success on the
+    strength of that 200 would tell a user they had provisioned Codex while
+    every run quietly executed Claude Code.
+
+    So the rendered workflow is read back. Unreadable (private-repo
+    permissions, or a setup PR not merged yet) says nothing rather than
+    guessing.
+    """
+    resolved = agent_matrix.resolve_agent(agent)
+    if resolved == agent_matrix.DEFAULT_AGENT:
+        # Claude Code is what every engine renders, axis or not.
+        return
+
+    installed = _provisioned_agent(repo)
+    if installed == resolved:
+        click.echo(
+            f"  Agent: {agent_matrix.agent_display_name(resolved)} "
+            f"({resolved})"
+        )
+        return
+    honored = None if installed is None else False
+    if honored is None:
+        click.secho(
+            f"  ⚠ could not read the provisioned workflow to confirm "
+            f"agent={resolved} took effect. Check it once the setup PR is "
+            f"merged:\n"
+            f"      remyxai outrider trigger --repo {repo} --mode smoke "
+            f"--agent {resolved}",
+            fg="yellow",
+        )
+        return
+    click.secho(
+        f"  ✗ this engine does not support the agent axis yet, so "
+        f"agent={resolved} was ignored and the install runs Claude Code.\n"
+        f"    Nothing downstream will flag this — the runs will look fine and "
+        f"be the wrong agent.\n"
+        f"    To run {agent_matrix.agent_display_name(resolved)} today, "
+        f"install with your own gh instead:\n"
+        f"      remyxai outrider setup-local --repo {repo} --agent {resolved}",
+        fg="red", bold=True,
+    )
+
+
+_WORKFLOW_AGENT_DEFAULT_RE = re.compile(
+    r"^      agent:\s*$.*?^        default:\s*'([A-Za-z0-9_-]+)'",
+    re.M | re.S,
+)
+
+
+def _provisioned_agent(repo: str, ref: Optional[str] = None) -> Optional[str]:
+    """Which agent the installed workflow actually runs, or None if unknown.
+
+    This exists because the engine's provision endpoint is a permissive
+    passthrough: one that predates the agent axis accepts `agent`, returns
+    200, and renders a Claude-Code workflow. Trusting that 200 would tell a
+    user they had provisioned Codex while every run quietly executed the
+    default agent instead.
+
+    It reads the *baked default* rather than merely checking that the file
+    forwards an `agent` input. Those are different propositions, and the
+    weaker one passes on exactly the install this is meant to catch — an
+    engine that renders the axis but ignored the requested value leaves
+    `default: 'claude'` in a file that does forward `inputs.agent`.
+
+    None means "cannot tell": an unreadable file (private-repo permissions),
+    a setup PR not merged yet, or a workflow from before the axis.
+    """
+    args = ["gh", "api",
+            f"/repos/{repo}/contents/.github/workflows/{WORKFLOW_FILENAME}"]
+    if ref:
+        args[-1] += f"?ref={ref}"
+    args += ["--jq", ".content"]
+    try:
+        raw = subprocess.check_output(args, text=True,
+                                      stderr=subprocess.DEVNULL).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    if not raw:
+        return None
+    try:
+        body = base64.b64decode(raw).decode("utf-8", "replace")
+    except (ValueError, TypeError):
+        return None
+    if "inputs.agent" not in body:
+        # Declares no axis at all: this install runs the action's default.
+        return agent_matrix.DEFAULT_AGENT if "remyxai/outrider" in body else None
+    match = _WORKFLOW_AGENT_DEFAULT_RE.search(body)
+    return match.group(1) if match else None
+
+
 def _outrider_workflow_exists(repo: str) -> bool:
     """Return True iff the repo has an Outrider workflow registered.
 
@@ -1212,6 +1360,27 @@ def _gh_dispatch_outrider(repo, branch, inputs):
 _UNEXPECTED_INPUTS_RE = re.compile(r'"([^"]+)"')
 
 
+def _retry_is_safe(inputs, dropped) -> Optional[str]:
+    """Why a pruned retry must not go out, or None.
+
+    The self-heal drops exactly the inputs GitHub named. When `agent` is one
+    of them the rest stay — so a `codex` + `openai` dispatch retried as a
+    plain `openai` dispatch, which runs on the workflow's own agent. If that
+    agent speaks a different API family than the provider left behind, the
+    retry is the family mismatch this CLI refuses at the command boundary.
+    Burning a run to discover that is worse than not dispatching.
+    """
+    if "agent" not in dropped:
+        return None
+    provider = inputs.get("provider") or ""
+    if not provider:
+        return None
+    problem = agent_matrix.first_error(
+        agent_matrix.check_pair("", provider, inputs.get("model") or "")
+    )
+    return problem.message if problem else None
+
+
 def _dispatch_with_input_fallback(repo, branch, inputs):
     """Dispatch, dropping inputs the installed workflow doesn't declare.
 
@@ -1233,6 +1402,14 @@ def _dispatch_with_input_fallback(repo, branch, inputs):
     if not undeclared:
         return ok, stderr, []
     pruned = {k: v for k, v in inputs.items() if k not in undeclared}
+    unsafe = _retry_is_safe(pruned, undeclared)
+    if unsafe:
+        return False, (
+            f"not retrying without `agent`: {unsafe} This install predates "
+            f"the agent axis, so the run would execute on its own agent. "
+            f"Re-provision it first (`remyxai outrider init --force`), or "
+            f"drop --provider to run it as installed."
+        ), sorted(undeclared)
     ok, stderr = _gh_dispatch_outrider(repo, branch, pruned)
     return ok, stderr, sorted(undeclared)
 
@@ -1350,11 +1527,12 @@ def _resolve_lead_content(lead_content, lead_content_file):
 
 
 def handle_outrider_trigger(
-    repo, search_method, pin_arxiv, interest_id, ref, claude_timeout=None,
-    provider=None, model=None, base_url=None, mode=None, publish=None,
-    start_from_ref=None, lead_content=None, lead_content_file=None,
-    staged_synthesis=False, test_integration_policy=None,
-    fidelity_policy=None, wait_for_slot=False,
+    repo, search_method, pin_arxiv, interest_id, ref, agent_timeout=None,
+    agent=None, provider=None, model=None, base_url=None, mode=None,
+    publish=None, start_from_ref=None, lead_content=None,
+    lead_content_file=None, staged_synthesis=False,
+    test_integration_policy=None, fidelity_policy=None, wait_for_slot=False,
+    claude_timeout=None,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -1364,10 +1542,14 @@ def handle_outrider_trigger(
     have an Outrider workflow installed (set up via `remyxai outrider init`
     or `setup-local`).
 
-    ``claude_timeout`` (seconds) overrides the action's default 900s
-    implementation-call ceiling on a per-dispatch basis. Useful for very
-    large monorepos where the default trips before the agent completes
-    (especially when routing at slower non-Anthropic backends).
+    ``agent`` selects the coding-agent CLI (claude / codex / backboard) and
+    ``provider`` selects the model behind it — two independent axes. An
+    impossible pair is rejected before the dispatch; ``agent_timeout``
+    (seconds) overrides the per-phase ceiling. ``claude_timeout`` is the old
+    name for that argument and still works.
+
+    Only Claude Code has a round cap, so on the other agents the timeout is
+    the only bound on spend.
 
     The refinement inputs — ``mode``, ``publish``, ``start_from_ref``,
     ``lead_content``/``lead_content_file``, ``staged_synthesis``,
@@ -1381,11 +1563,42 @@ def handle_outrider_trigger(
         raise click.UsageError(
             "--search-method and --pin-arxiv are mutually exclusive."
         )
-    if claude_timeout is not None and claude_timeout < 60:
+    # `--claude-timeout` is the old name for `--agent-timeout`. Click maps
+    # both spellings onto one parameter, so this only matters for callers
+    # invoking the handler directly (the engine path, and the tests written
+    # before the rename).
+    if agent_timeout is None:
+        agent_timeout = claude_timeout
+    if agent_timeout is not None and agent_timeout < 60:
         raise click.UsageError(
-            "--claude-timeout must be at least 60 seconds (a tighter value "
+            "--agent-timeout must be at least 60 seconds (a tighter value "
             "trips before the agent can finish even a small task)."
         )
+
+    # Reject an impossible agent/provider pair here rather than after a
+    # dispatch round-trip. Only a durable fact hard-fails — see
+    # remyxai.agent_matrix on why an unrecognized value passes through with a
+    # warning instead.
+    #
+    # Only when the caller NAMED an agent, though. An omitted `--agent` means
+    # "whatever this install runs", and a workflow written by `setup-local
+    # --agent codex` defaults to codex, not to the action's empty-input
+    # default. Validating against Claude Code both refused valid dispatches
+    # (`--provider openai` on a codex install) and waved through invalid ones
+    # (`--provider zai`, which that install's codex default cannot serve), so
+    # an unnamed agent downgrades the family mismatch to a warning the run
+    # itself will confirm or disprove.
+    for problem in agent_matrix.check_pair(agent or "", provider or "", model or ""):
+        if problem.is_error and agent:
+            raise click.UsageError(problem.message)
+        if problem.is_error:
+            # Deferred, not waived: an omitted --agent means "whatever this
+            # install runs", which is a fact about the repo and is checked
+            # once the repo is resolved (see below). Judging it against the
+            # action's empty-input default here refused dispatches that were
+            # correct for a codex install.
+            continue
+        click.secho(f"⚠ {problem.message}", fg="yellow")
     lead = _resolve_lead_content(lead_content, lead_content_file)
 
     # Repo resolution
@@ -1425,7 +1638,15 @@ def handle_outrider_trigger(
         # Forward as a string — workflow_dispatch input values are
         # always strings on the wire. The action's INPUT_CLAUDE_TIMEOUT
         # parser handles the int conversion (and validates it).
-        "claude-timeout": str(claude_timeout) if claude_timeout else "",
+        # Sent under the OLD name deliberately. The action accepts both
+        # `claude-timeout` and `agent-timeout`, but a workflow installed
+        # before the rename declares only `claude-timeout` — and the 422
+        # self-heal below drops an undeclared input and retries, so sending
+        # the new name would make `--agent-timeout` silently do nothing on
+        # every existing install. The old name works everywhere.
+        "claude-timeout": str(agent_timeout) if agent_timeout else "",
+        # Which coding-agent CLI runs the implementation.
+        "agent": agent or "",
         # The target workflow must declare `provider` + `model` as
         # workflow_dispatch inputs for these to take effect. The
         # current CLI-generated template does; older templates and
@@ -1452,12 +1673,40 @@ def handle_outrider_trigger(
     }
     supplied = {k: v for k, v in inputs.items() if v}
     if len(supplied) > GH_MAX_DISPATCH_INPUTS:
-        raise click.UsageError(
-            f"{len(supplied)} inputs supplied ({', '.join(sorted(supplied))}) "
-            f"but GitHub accepts at most {GH_MAX_DISPATCH_INPUTS} per "
-            f"workflow_dispatch. Drop the ones the workflow's own defaults "
-            f"already cover."
+        click.secho(
+            f"note: {len(supplied)} inputs supplied "
+            f"({', '.join(sorted(supplied))}); GitHub documents a maximum of "
+            f"{GH_MAX_DISPATCH_INPUTS} per workflow_dispatch. Dispatching "
+            f"anyway — the API accepts more in practice. If it is rejected, "
+            f"drop the ones the workflow's own defaults already cover.",
+            fg="yellow",
         )
+
+    # The pair check the command boundary had to defer: with no --agent, the
+    # agent is whatever the installed workflow bakes, so read it and judge the
+    # pair against that. Skipping this waved through `--provider openai` on
+    # an install whose agent speaks the other API family — which dispatched,
+    # ran, and failed on "that model may not exist", having spent the run to
+    # find out.
+    if provider and not agent:
+        installed = _provisioned_agent(resolved_repo, ref=branch)
+        if installed:
+            problem = agent_matrix.first_error(
+                agent_matrix.check_pair(installed, provider, model or "")
+            )
+            if problem:
+                raise click.UsageError(
+                    f"{resolved_repo} runs agent={installed}, and {problem.message} "
+                    f"Pass --agent to dispatch a different one, if the repo's "
+                    f"workflow declares the input."
+                )
+        else:
+            click.secho(
+                f"⚠ could not read {resolved_repo}'s installed agent, so the "
+                f"provider pair was not checked. If the run fails on an "
+                f"unrecognised model id, that is why.",
+                fg="yellow",
+            )
 
     # A pending run means this dispatch cancels it (static concurrency group).
     _warn_or_wait_for_queue(resolved_repo, wait_for_slot)
@@ -1477,8 +1726,10 @@ def handle_outrider_trigger(
         click.echo(f"  pin-arxiv:      {pin_arxiv!r}")
     if interest_id:
         click.echo(f"  interest:       {interest_id}")
-    if claude_timeout:
-        click.echo(f"  claude-timeout: {claude_timeout}s")
+    if agent:
+        click.echo(f"  agent:          {agent}")
+    if agent_timeout:
+        click.echo(f"  agent-timeout:  {agent_timeout}s")
     if mode:
         click.echo(f"  mode:           {mode}")
     if start_from_ref:
@@ -1509,6 +1760,21 @@ def handle_outrider_trigger(
             f"    remyxai outrider init --repo {resolved_repo} --force",
             fg="yellow",
         )
+        requested_agent = agent_matrix.resolve_agent(agent)
+        if "agent" in dropped and requested_agent != agent_matrix.DEFAULT_AGENT:
+            # Worth saying separately and louder. Dropping `publish` falls
+            # back to a default that does roughly what you asked; dropping
+            # `agent` means the run is executing on a DIFFERENT coding agent
+            # than the one requested, spending real tokens to do it, and
+            # nothing downstream will look wrong — the run just quietly is
+            # not the experiment you thought you launched.
+            click.secho(
+                f"  → the run is now on the workflow's own agent, not "
+                f"{requested_agent!r}. Nothing downstream will flag this. "
+                f"Re-provision before trusting the result:\n"
+                f"    remyxai outrider init --repo {resolved_repo} --force",
+                fg="red", bold=True,
+            )
 
     click.secho("✓ Dispatched.", fg="green", bold=True)
     url = _gh_latest_run_url(resolved_repo)
@@ -1538,14 +1804,12 @@ def handle_set_provider_secret(repo, provider, key_from):
     length before sending so a clearly-truncated value is rejected at
     the CLI boundary rather than after a wasted workflow run.
 
-    Provider name → secret name map (``_PROVIDER_SECRET_NAMES``):
-
-    - ``anthropic`` → ``ANTHROPIC_API_KEY``
-    - ``zai`` → ``ZAI_API_KEY``
-    - ``moonshot`` → ``MOONSHOT_API_KEY``
+    The provider → secret name map comes from the action's published
+    matrix (``_PROVIDER_SECRET_NAMES``), so every provider the action
+    understands is settable here — the convention is ``<VENDOR>_API_KEY``.
     """
     if provider not in _PROVIDER_SECRET_NAMES:
-        choices = ", ".join(sorted(_PROVIDER_SECRET_NAMES))
+        choices = ", ".join(SECRET_PROVIDER_CHOICES)
         raise click.UsageError(
             f"--provider must be one of: {choices} (got {provider!r})"
         )
@@ -1599,7 +1863,10 @@ def handle_set_provider_secret(repo, provider, key_from):
     click.secho(
         f"✓ Set {secret_name} on {resolved_repo}.", fg="green", bold=True,
     )
-    default_model = {"zai": "glm-5.2", "moonshot": "kimi-k3"}.get(provider)
+    # From the matrix, not a literal: the inline copy that used to live here
+    # still said `glm-5.2` long after the action moved to `glm-5.3`, so the
+    # command's own "next, run this" hint printed a stale model id.
+    default_model = agent_matrix.default_model("claude", provider)
     if default_model:
         click.echo(
             "  Next: `remyxai outrider trigger --repo "

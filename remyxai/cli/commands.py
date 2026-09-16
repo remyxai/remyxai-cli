@@ -26,13 +26,18 @@ from remyxai.cli.interest_actions import (
 )
 from remyxai.cli.outrider_actions import (
     PROVIDER_CHOICES,
+    AGENT_CHOICES,
+    SECRET_PROVIDER_CHOICES,
     _parse_bulk_repos_tsv,
     _run_bulk,
     handle_outrider_init,
     handle_outrider_trigger,
     handle_set_provider_secret,
 )
-from remyxai.cli.outrider_local import handle_outrider_setup_local
+from remyxai.cli.outrider_local import (
+    TWO_TIER_BACKEND_CHOICES,
+    handle_outrider_setup_local,
+)
 
 
 @click.group()
@@ -607,21 +612,38 @@ def outrider():
               ))
 @click.option("--anthropic-key", "anthropic_key", default=None,
               help=(
-                  "Anthropic API key to connect as the model provider "
-                  "(Claude Code). Falls back to $ANTHROPIC_API_KEY. Only used "
-                  "if one isn't already connected."
+                  "Anthropic API key to connect as the model provider. "
+                  "(The engine lists this integration as \"Claude Code\" — "
+                  "that is its name there, not an agent selection; the "
+                  "coding agent is a separate axis.) Falls back to "
+                  "$ANTHROPIC_API_KEY. Only used if one isn't already "
+                  "connected."
               ))
 @click.option("--single-tier", "single_tier", is_flag=True, default=False,
               help=(
                   "Install the plain single-file workflow instead of the "
                   "default two-tier drafter/refiner setup."
               ))
+@click.option("--agent", "agent",
+              type=click.Choice(AGENT_CHOICES),
+              default=None,
+              help=(
+                  "Which coding-agent CLI runs the implementation "
+                  "(claude, codex, backboard). A separate axis from "
+                  "--provider, which picks the model. NOTE: `init` "
+                  "provisions server-side, so this only takes effect on an "
+                  "engine that supports the agent axis — the CLI reads the "
+                  "provisioned workflow back and tells you if it was "
+                  "ignored. `outrider setup-local --agent` works today on "
+                  "any engine."
+              ))
 @click.option("--provider", "provider",
               type=click.Choice(PROVIDER_CHOICES),
               default=None,
               help=(
-                  "Model provider for BOTH tiers: anthropic (Claude Code), "
-                  "zai (Z.ai), or moonshot (Moonshot AI). Defaults to your "
+                  "Model provider for BOTH tiers: anthropic, zai (Z.ai), "
+                  "or moonshot (Moonshot AI). This is the model axis — the "
+                  "coding agent is picked separately. Defaults to your "
                   "connected provider. Override a single tier with "
                   "--drafter-provider / --refiner-provider. Each tier needs a "
                   "key: connected at engine.remyx.ai/integrations, or in this "
@@ -700,7 +722,7 @@ def outrider():
               ))
 def outrider_init(
     repo, interest_id, auto_interest, mode, anthropic_key,
-    single_tier, provider, model,
+    single_tier, agent, provider, model,
     drafter_provider, drafter_model, refiner_provider, refiner_model,
     force, skip_key_check, byok,
     no_wait, bulk_repos, pace_s, dry_run, skip_confirm,
@@ -720,8 +742,7 @@ def outrider_init(
     explores as fork branches, plus a weekly *refiner* that promotes the
     strongest draft to a ready-for-review PR (crons off — drive them with
     `remyxai outrider trigger` or your own dispatcher). Any provider works —
-    anthropic (Claude Code), zai (Z.ai), or moonshot (Moonshot AI), all on
-    equal footing. One `--provider` / `--model` applies to both tiers;
+    anthropic, zai (Z.ai), or moonshot (Moonshot AI), all on equal footing. One `--provider` / `--model` applies to both tiers;
     `--drafter-*` / `--refiner-*` tune a single tier; unset, a tier follows
     your connected provider. Pass `--single-tier` for the plain single-file
     workflow instead.
@@ -803,6 +824,7 @@ def outrider_init(
                 force=force,
                 skip_key_check=skip_key_check,
                 byok=byok,
+                agent=agent,
                 skip_confirm=skip_confirm,
                 dry_run=dry_run,
                 no_wait=no_wait,
@@ -826,6 +848,7 @@ def outrider_init(
         force=force,
         skip_key_check=skip_key_check,
         byok=byok,
+        agent=agent,
         skip_confirm=skip_confirm,
         dry_run=dry_run,
         no_wait=no_wait,
@@ -857,11 +880,12 @@ def outrider_init(
               ))
 @click.option("--no-cocoindex", "no_cocoindex", is_flag=True, default=False,
               help=(
-                  "Omit the cocoindex-code install + ENVIRONMENTS.md write "
-                  "steps from the workflow. Default is to include them — "
-                  "AST-based code search grounds the selection agent's "
-                  "call-site claims on real paths. See outrider's "
-                  "docs/environments.md for the rationale."
+                  "Turn off cocoindex-code AST search for this install "
+                  "(sets the action's `enable-cocoindex` to false). Default "
+                  "is on — AST-based code search grounds the selection "
+                  "agent's call-site claims on real paths. The action "
+                  "installs it where the selected agent can reach it. See "
+                  "outrider's docs/environments.md for the rationale."
               ))
 @click.option("--two-tier", "two_tier", is_flag=True, default=False,
               help=(
@@ -901,12 +925,39 @@ def outrider_init(
                   "secret. Only needed when a --*-model selects a GLM model; "
                   "falls back to $ZAI_API_KEY / $Z_AI_KEY, else prompts."
               ))
-@click.option("--backend", "backend",
-              type=click.Choice(["anthropic", "zai", "moonshot"]),
-              default="anthropic", show_default=True,
+@click.option("--agent", "agent",
+              type=click.Choice(AGENT_CHOICES),
+              default="claude", show_default=True,
               help=(
-                  "Which Anthropic-Messages-compat backend the single-file "
-                  "setup routes at by default. Selects the workflow_dispatch "
+                  "Which coding-agent CLI the generated workflow runs by "
+                  "default. A separate axis from --backend, which picks the "
+                  "model. Sets the `agent` workflow_dispatch input's default; "
+                  "the workflow can still dispatch another agent at run time, "
+                  "provided that agent's credential is set on the repo. "
+                  "setup-local writes only the selected backend's secret — "
+                  "add another backend's with `remyxai outrider "
+                  "set-provider-secret`. Most agents read no credential of "
+                  "their own: the action derives theirs from the provider's "
+                  "key, and a repo secret named for the agent would shadow "
+                  "it. A native router is the exception — its own key IS the "
+                  "credential — so `gh secret set BACKBOARD_API_KEY`."
+              ))
+@click.option("--model", "model", default=None,
+              help=(
+                  "Model id the install runs by default, from the provider "
+                  "you picked (e.g. gpt-5.4-mini on openai, glm-5.3 on zai). "
+                  "Becomes the `model` workflow_dispatch input's default, so "
+                  "a dispatch can still override it. Empty lets the agent "
+                  "choose its own default, which some providers do not "
+                  "recognise — the install says so when that applies."
+              ))
+@click.option("--backend", "backend",
+              type=click.Choice(TWO_TIER_BACKEND_CHOICES),
+              default=None,
+              help=(
+                  "Which model backend the single-file setup routes at by "
+                  "default — on either API family, since the agent axis "
+                  "decides which one is spoken. Selects the workflow_dispatch "
                   "`provider` input's default and the secret setup-local "
                   "prompts for (only the selected backend's secret is written; "
                   "add others via `gh secret set` for per-dispatch switching). "
@@ -931,7 +982,7 @@ def outrider_init(
 def outrider_setup_local(
     repo, interest_id, auto_interest, mode, anthropic_key,
     no_cron, no_cocoindex, two_tier, drafter_model, refiner_model, refine_model,
-    zai_key, backend, bulk_repos, pace_s, dry_run, skip_confirm,
+    zai_key, agent, backend, model, bulk_repos, pace_s, dry_run, skip_confirm,
 ):
     """
     Set up Outrider WITHOUT the Remyx GitHub App.
@@ -982,6 +1033,8 @@ def outrider_setup_local(
                 refine_model=refine_model,
                 zai_key=zai_key,
                 backend=backend,
+                agent=agent,
+                model=model or "",
             ),
             pace_s=pace_s,
         )
@@ -1002,6 +1055,8 @@ def outrider_setup_local(
         refine_model=refine_model,
         zai_key=zai_key,
         backend=backend,
+        agent=agent,
+        model=model or "",
     )
 
 
@@ -1033,18 +1088,34 @@ def outrider_setup_local(
 @click.option("--ref", "ref", default=None,
               help="Git ref to dispatch on. Defaults to the repo's default "
                    "branch.")
-@click.option("--claude-timeout", "claude_timeout", type=int, default=None,
+@click.option("--agent", "agent", default=None,
               help=(
-                  "Wall-clock seconds for the Claude Code agent calls "
-                  "on this dispatch (preflight + implementation share "
-                  "the budget). Default (unset) lets the action's own "
-                  "default apply (900s). Raise for very large monorepos "
-                  "or slower non-default providers."
+                  "Which coding-agent CLI runs the implementation on this "
+                  "dispatch (claude, codex, backboard). A separate axis from "
+                  "--provider, which picks the model. Unset keeps the "
+                  "workflow's own default. Not every agent/provider pair is "
+                  "valid; an impossible one is rejected here rather than "
+                  "after a dispatch round-trip. Requires the target workflow "
+                  "to declare an `agent` input — re-run `outrider init "
+                  "--force` (or setup-local) on installs predating it."
+              ))
+@click.option("--agent-timeout", "--claude-timeout", "agent_timeout",
+              type=int, default=None,
+              help=(
+                  "Wall-clock seconds for each agent phase on this dispatch "
+                  "(preflight + implementation share the budget). Unset lets "
+                  "the workflow's own default apply. Raise for very large "
+                  "monorepos or slower backends. Only Claude Code has a "
+                  "round cap, so on codex and backboard this is the ONLY "
+                  "spend bound — keep it tight. `--claude-timeout` is the "
+                  "old name for this flag and still works."
               ))
 @click.option("--provider", "provider", default=None,
               help=(
-                  "Route Claude Code at a specific model provider for "
-                  "this dispatch (e.g. 'anthropic', 'zai'). Requires the "
+                  "Route the coding agent at a specific model backend "
+                  "for this dispatch (e.g. 'anthropic', 'openai', 'zai', "
+                  "'moonshot', 'openrouter'). A separate axis from "
+                  "--agent, which picks the agent CLI. Requires the "
                   "target workflow to declare a `provider` workflow_"
                   "dispatch input; if unset, the workflow's own default "
                   "applies."
@@ -1129,7 +1200,7 @@ def outrider_setup_local(
                   "repo."
               ))
 def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
-                     claude_timeout, provider, model, base_url, mode,
+                     agent, agent_timeout, provider, model, base_url, mode,
                      publish, start_from_ref, lead_content,
                      lead_content_file, staged_synthesis,
                      test_integration_policy, fidelity_policy,
@@ -1142,7 +1213,7 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
     \b
     - default (no pin): Remyx ranks candidates from the interest-scoped
       pool + Outrider's audit augments via agentic refine-queries;
-      Claude Code picks the best implementation from the ranked pool.
+      the coding agent picks the best implementation from the ranked pool.
     - --search-method: overrides the ranked pool with an engine search
       on the user-specified query; the top hit gets implemented.
     - --pin-arxiv: exact arxiv paper; bypasses the pool entirely and
@@ -1169,14 +1240,19 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
       remyxai outrider trigger --repo owner/name \\
         --search-method "riemannian preconditioning LoRA optimizer"
 
-      # Route at z.ai's GLM-5.2 for this dispatch (Anthropic is the
+      # Route at z.ai's GLM for this dispatch (Anthropic is the
       # workflow's default; this overrides for one run)
       remyxai outrider trigger --repo owner/name \\
-        --pin-arxiv 2402.02347v3 --provider zai --model glm-5.2
+        --pin-arxiv 2402.02347v3 --provider zai --model glm-5.3
+
+      # Switch the coding agent too — a separate axis from the model
+      remyxai outrider trigger --repo owner/name \\
+        --pin-arxiv 2402.02347v3 \\
+        --agent codex --provider openai --model gpt-5.4-mini
 
       # Bump the implementation timeout for a very large monorepo
       remyxai outrider trigger --repo owner/name \\
-        --pin-arxiv 2402.02347v3 --claude-timeout 1800
+        --pin-arxiv 2402.02347v3 --agent-timeout 1800
 
       # Refine an existing branch: build on it, with a gap analysis as
       # leading context (the second-pass / promotion shape)
@@ -1198,7 +1274,8 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
         pin_arxiv=pin_arxiv,
         interest_id=interest_id,
         ref=ref,
-        claude_timeout=claude_timeout,
+        agent=agent,
+        agent_timeout=agent_timeout,
         provider=provider,
         model=model,
         base_url=base_url,
@@ -1218,11 +1295,13 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
 @click.option("--repo", "repo", default=None,
               help="Target repo (owner/name). Defaults to the cwd's git remote.")
 @click.option("--provider", "provider", required=True,
-              type=click.Choice(PROVIDER_CHOICES),
+              type=click.Choice(SECRET_PROVIDER_CHOICES),
               help=(
                   "Which provider's API key this is for. Selects the secret "
-                  "name (anthropic→ANTHROPIC_API_KEY, zai→ZAI_API_KEY, "
-                  "moonshot→MOONSHOT_API_KEY)."
+                  "name by the <VENDOR>_API_KEY convention — anthropic→"
+                  "ANTHROPIC_API_KEY, zai→ZAI_API_KEY, and so on. Covers "
+                  "every provider the action understands, which is wider "
+                  "than the set `init` can provision through the engine."
               ))
 @click.option("--key-from", "key_from", required=True,
               type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -1261,11 +1340,10 @@ def outrider_set_provider_secret(repo, provider, key_from):
         --key-from ~/moonshot-key
 
     The matching workflow_dispatch input on the repo's outrider.yml
-    routes a dispatch with `--provider zai --model glm-5.2` at the
-    configured z.ai endpoint; the workflow's "Configure provider auth"
-    step picks the right env var (ANTHROPIC_AUTH_TOKEN vs
-    ANTHROPIC_API_KEY) so Claude Code uses the right auth header
-    for the chosen provider.
+    routes a dispatch with `--provider zai --model glm-5.3` at the
+    configured z.ai endpoint; the action resolves the credential,
+    endpoint and auth header style for the (agent, provider) pair, so
+    the same secret works whichever agent the dispatch selects.
     """
     handle_set_provider_secret(repo=repo, provider=provider, key_from=key_from)
 

@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from typing import Optional
 
 import click
+
+from remyxai import agent_matrix
 
 # Shared helpers with the engine path (repo parsing + interest resolution).
 from remyxai.cli.outrider_actions import (
@@ -211,54 +214,123 @@ def _gh_dispatch(repo: str, branch: str) -> bool:
 
 # ─── backend registry ──────────────────────────────────────────────────────
 #
-# One entry per Anthropic-Messages-compat backend the Outrider action's
-# `provider` input recognizes (added in outrider v1.7.29). The registry
-# drives (a) which secret env var to prompt/read for the selected backend,
-# (b) the generated workflow's per-backend defaults (model, claude-timeout),
-# and (c) the workflow_dispatch `provider` choice list.
+# Facts about a provider — its secret env var, its endpoint, its display name,
+# its default model — are NOT written here. They come from the action's
+# published compatibility matrix via :mod:`remyxai.agent_matrix`, because this
+# used to be a third hand-kept copy of that data (after the action's own
+# registry and the engine's MODEL_PROVIDERS) and it drifted exactly as you
+# would expect the hand-edited copy to: it had z.ai defaulting to `glm-5.2`
+# long after the action moved to `glm-5.3`, and it never learned `openai`,
+# `openrouter` or `custom` at all.
 #
-# Adding a new backend here + wiring the same name in the outrider action's
-# `provider` case-switch is the complete change to add support — no
-# per-vendor CLI flags added by convention (existing --anthropic-key /
-# --zai-key are preserved for backward compat).
-# ``base_url`` is what makes a backend PROXIED: its key goes in
-# ANTHROPIC_AUTH_TOKEN with ANTHROPIC_BASE_URL pointing here, rather than in
-# ANTHROPIC_API_KEY (native). ``model_prefixes`` is how a per-stage
-# ``--drafter-model`` / ``--refiner-model`` names its backend without a separate
-# provider flag — the whole reason `kimi-k3` used to be treated as an Anthropic
-# model, rendered against ANTHROPIC_API_KEY, and died on its first run.
-_BACKEND_REGISTRY: dict = {
+# What stays here is *policy this CLI chooses*, which the matrix has no
+# opinion about:
+#
+#   default_model           what to render when the caller names none, for a
+#                           provider the matrix has no default for
+#   default_claude_timeout  per-provider wall-clock budget for the generated
+#                           workflow — a slower backend needs a bigger one
+#   model_prefixes          how a bare ``--drafter-model`` / ``--refiner-model``
+#                           names its provider without a separate flag
+#
+# The keys also bound which providers the **two-tier local install** supports.
+# That path rewrites an Anthropic-Messages workflow template in place (model,
+# Bearer auth, base URL), so it is Claude-Code-only by construction; the wider
+# provider set the matrix knows is reachable through `provider:` on a normal
+# install, not through here.
+_STAGE_POLICY: dict = {
     "anthropic": {
-        "secret_env": "ANTHROPIC_API_KEY",
         "default_model": "claude-opus-4-8",
         "default_claude_timeout": "900",
-        "display_name": "Anthropic",
-        "base_url": None,
         "model_prefixes": ("claude",),
     },
     "zai": {
-        "secret_env": "ZAI_API_KEY",
-        "default_model": "glm-5.2",
-        # glm-5.2's thinking mode adds per-turn latency similar to Kimi's
-        # kimi-k3; bumped from the historical 900s default to give the
-        # coding session enough headroom before hitting claude-timeout.
+        # GLM's thinking mode adds per-turn latency similar to Kimi's; bumped
+        # from the historical 900s to give the coding session enough headroom
+        # before hitting the timeout.
         "default_claude_timeout": "3600",
-        "display_name": "z.ai (GLM)",
-        "base_url": "https://api.z.ai/api/anthropic",
         "model_prefixes": ("glm",),
     },
     "moonshot": {
-        "secret_env": "MOONSHOT_API_KEY",
-        "default_model": "kimi-k3",
-        # Kimi's thinking-mode kimi-k3 runs slower per turn than Anthropic
-        # Opus; the bumped default matches the recommended value in the
-        # outrider action's docs/backends.md table.
+        # Kimi's thinking mode runs slower per turn than Anthropic Opus; the
+        # bumped default matches the action's own docs/backends.md table.
         "default_claude_timeout": "3600",
-        "display_name": "Moonshot (Kimi)",
-        "base_url": "https://api.moonshot.ai/anthropic",
         "model_prefixes": ("kimi", "moonshot"),
     },
 }
+
+
+#: Wall-clock budget for a provider `_STAGE_POLICY` has no row for.
+#:
+#: `--backend` has to offer every provider a *selected agent* can reach, or
+#: `--agent codex` is offered alongside only providers Codex cannot speak to
+#: — which is what happened: `--agent codex --backend anthropic` installed
+#: cleanly and produced a workflow whose own defaults were an impossible
+#: pair. Providers outside the two-tier set therefore need a timeout, and
+#: the generous value is the right default for an unknown backend.
+_DEFAULT_STAGE_TIMEOUT = "3600"
+
+
+def _build_backend_registry() -> dict:
+    """Join this CLI's policy onto the action's published provider facts.
+
+    ``base_url`` is what makes a provider PROXIED: its key goes in
+    ANTHROPIC_AUTH_TOKEN with ANTHROPIC_BASE_URL pointing at it, rather than
+    in ANTHROPIC_API_KEY (native). That distinction now comes from the matrix
+    rather than from a hand-maintained field.
+    """
+    registry = {}
+    # `_STAGE_POLICY` order first, then the rest alphabetically. Order is not
+    # cosmetic: `providers_for_stages` returns registry order and the two-tier
+    # install treats the first entry as the primary secret, so reordering
+    # would change which key a two-tier install names in its summary and
+    # rollback path.
+    ordered = list(_STAGE_POLICY) + [
+        p for p in agent_matrix.known_providers() if p not in _STAGE_POLICY
+    ]
+    for provider in ordered:
+        info = agent_matrix.provider_info(provider)
+        if info is None:
+            raise RuntimeError(
+                f"the vendored agent matrix has no provider {provider!r}, "
+                f"which this CLI depends on. Refresh it: "
+                f"python scripts/sync_agent_matrix.py"
+            )
+        if not info["secret_env"]:
+            # `custom` brings its own endpoint and auth; there is no
+            # conventional secret to prompt for, so it is not installable
+            # as a default here.
+            continue
+        policy = _STAGE_POLICY.get(provider, {})
+        registry[provider] = dict(
+            policy,
+            default_claude_timeout=policy.get(
+                "default_claude_timeout", _DEFAULT_STAGE_TIMEOUT
+            ),
+            model_prefixes=policy.get("model_prefixes", ()),
+            secret_env=agent_matrix.secret_env("claude", provider),
+            base_url=agent_matrix.endpoint("claude", provider) or None,
+            display_name=agent_matrix.provider_display_name(provider),
+            # Prefer the action's own default so the two cannot disagree
+            # about what `--provider zai` with no `--model` actually runs.
+            default_model=(
+                agent_matrix.default_model("claude", provider)
+                or policy.get("default_model", "")
+            ),
+        )
+    return registry
+
+
+_BACKEND_REGISTRY: dict = _build_backend_registry()
+
+#: The `--backend` choice list for the local install path.
+#:
+#: Bounded by what `_render_local_workflow` can actually render, NOT by every
+#: provider serving anthropic-messages. Deriving it from the matrix instead
+#: put `openrouter` on the flag — click accepted it and the renderer then
+#: raised ValueError, because there is no `_STAGE_POLICY` row to render from.
+#: A choice list has to promise exactly what the code behind it supports.
+TWO_TIER_BACKEND_CHOICES = sorted(_BACKEND_REGISTRY)
 
 # The provider a stage falls back to when no model override names one — it's
 # what the @v1 two-tier templates ship with.
@@ -267,43 +339,66 @@ _TEMPLATE_DEFAULT_PROVIDER = "anthropic"
 
 # ─── workflow rendering (inline; no Remyx App / bot-token step) ─────────────
 
-_COCOINDEX_STEPS_BLOCK = """      # Attach cocoindex-code as a Claude Code skill so the Outrider agent
-      # can ground-truth call-site claims via AST-based semantic code search
-      # instead of speculating from paper metadata. Recommended default;
-      # pass --no-cocoindex to `remyxai outrider setup-local` to omit.
-      - name: Install cocoindex-code as a Claude Code skill
-        run: |
-          git clone --depth 1 https://github.com/cocoindex-io/cocoindex-code /tmp/cocoindex-code
-          pipx install 'cocoindex-code[full]'
-          mkdir -p ~/.claude/skills/
-          ln -sfn /tmp/cocoindex-code ~/.claude/skills/cocoindex-code
-      - name: Write ENVIRONMENTS.md for Outrider
-        run: |
-          cat > "$GITHUB_WORKSPACE/ENVIRONMENTS.md" <<'EOF'
-          ---
-          type: Workflow Environment
-          title: cocoindex-code AST search available
-          description: cocoindex-code AST-based semantic code search is pre-installed as a Claude Code skill.
-          resource: https://github.com/cocoindex-io/cocoindex-code
-          tags: [outrider, environment, cocoindex-code, ast-search]
-          ---
+# cocoindex-code (AST semantic search) is installed by the ACTION, not here.
+#
+# This template used to carry its own install + ENVIRONMENTS.md steps, which
+# was wrong in three ways once a run could use something other than Claude
+# Code:
+#
+#   * it symlinked into ~/.claude/skills unconditionally, so a Codex or R-CLI
+#     run cloned a skill into a directory that agent never reads;
+#   * the ENVIRONMENTS.md it wrote told *every* agent that `ccc` was "a Claude
+#     Code skill" invoked as a skill — a route two of the three agents do not
+#     have, whose failure looks like the model ignoring an instruction;
+#   * the action installs cocoindex itself when `enable-cocoindex` is true
+#     (its default), so every setup-local install did the ~1GB install twice
+#     and wrote two different ENVIRONMENTS.md files.
+#
+# The action does all of it agent-aware — it asks the backend for its
+# skills_home and generates the surface text from tool_invocation_hint — so
+# the only thing to do here is forward the flag.
 
-          # Environment: cocoindex-code AST search
 
-          ## Available tools
+def _workflow_secret_names() -> list:
+    """Every secret the generated workflow should reference, from the matrix.
 
-          - **`ccc` CLI** (AST-based semantic code search across the cloned repo).
-            Prefer over reading entire large files when locating functions,
-            classes, or specific code patterns. Multi-language via tree-sitter.
+    Each provider's conventional ``<VENDOR>_API_KEY`` plus each agent's own
+    credential — Backboard's key is both its agent credential and its
+    model-routing credential, so it arrives via the agent side. REMYX_API_KEY
+    leads because the run cannot fetch a recommendation without it.
 
-          ## Suggested use during implementation
-
-          - For "find the function that does X" queries, invoke the semantic-search
-            skill rather than Read/Grep on speculation.
-          - For files > 500 LOC where you only need one function, prefer AST search
-            + targeted Read over reading the whole file.
-          EOF
-"""
+    Derived rather than listed so a provider added to the action reaches new
+    installs without a CLI release. The generated workflow references them
+    all; the action reads only the ones its `agent` / `provider` select.
+    """
+    names = ["REMYX_API_KEY"]
+    for provider in agent_matrix.known_providers():
+        secret = agent_matrix.provider_info(provider)["secret_env"]
+        if secret and secret not in names:
+            names.append(secret)
+    for agent in agent_matrix.known_agents():
+        # ONLY a native router's key. Every other agent credential is
+        # *derived* by the action's Configure step, which resolves the
+        # provider's secret into the agent's key env and writes it to
+        # $GITHUB_ENV — and a step-level `env:` entry takes precedence over
+        # $GITHUB_ENV, so declaring one here with a secret the repo does not
+        # have sets it to the empty string and shadows the resolved value.
+        #
+        # That is not theoretical: referencing every credential put
+        # `CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}` in the block, the repo
+        # had no such secret, and a `codex` + `openai` run died with
+        # "agent=codex requires CODEX_API_KEY in the caller's env block" one
+        # step after Configure had logged `CODEX_API_KEY=(set)`.
+        #
+        # A native router is the exception because its key is genuinely
+        # caller-supplied — Backboard's is both the agent credential and the
+        # model-routing credential, so nothing derives it.
+        if not agent_matrix.is_native_router(agent):
+            continue
+        key = agent_matrix.agent_info(agent)["key_env"]
+        if key and key not in names:
+            names.append(key)
+    return names
 
 
 def _render_local_workflow(
@@ -311,6 +406,8 @@ def _render_local_workflow(
     no_cron: bool = False,
     no_cocoindex: bool = False,
     backend: str = "anthropic",
+    agent: str = "",
+    model: str = "",
 ) -> str:
     # No github-token input → the action uses this repo's built-in
     # GITHUB_TOKEN, which setup-local authorizes to open PRs.
@@ -325,20 +422,79 @@ def _render_local_workflow(
     # the recommended default.
     #
     # ``backend`` picks the default value of the workflow_dispatch ``provider``
-    # input (anthropic / zai / moonshot) and the corresponding default
-    # ``claude-timeout``. Per-dispatch switching stays available: users can
-    # dispatch with a different ``provider`` as long as the corresponding
-    # secret is set on the repo (setup-local writes only the selected backend's
-    # secret; add others via ``gh secret set`` for cross-backend dispatch).
+    # input and the baked ``claude-timeout``. ``agent`` picks the default of
+    # the ``agent`` input — which coding-agent CLI does the work. Per-dispatch
+    # switching stays available on both axes, as long as the corresponding
+    # secret is set on the repo (setup-local writes only the selected
+    # backend's secret; add others with
+    # ``remyxai outrider set-provider-secret`` for cross-backend dispatch).
+    #
+    # INPUT BUDGET: GitHub documents a maximum of 10 workflow_dispatch inputs
+    # and actionlint fails a workflow that declares more. The limit is not
+    # enforced at dispatch time — measured directly, a workflow declaring 11
+    # and then 12 inputs was accepted and ran — so the 11 this template
+    # shipped were not breaking installs; they were outside the documented
+    # contract, failing lint, and past what the Actions "Run workflow" form
+    # is specified to render. Staying inside 10 keeps the template lintable,
+    # keeps the manual path predictable, and lands on exactly the set the
+    # action's own canonical outrider.yml declares. Adding ``agent`` inside
+    # that budget needed two slots back:
+    #
+    #   search-method   dropped. The canonical template never declared it
+    #                   either, so ``trigger --search-method`` already warned
+    #                   on App-provisioned installs; this only makes the two
+    #                   templates agree. ``--pin-arxiv`` covers the manual
+    #                   case.
+    #   claude-timeout  kept, but last in the list and defaulted to empty:
+    #                   the install's own budget is baked into ``with:`` and a
+    #                   dispatch may override it. Dropping it made `trigger
+    #                   --agent-timeout` a documented flag that every template
+    #                   silently discarded, which matters because neither
+    #                   Codex nor R-CLI has a round cap and the timeout is
+    #                   their only spend bound.
+    #
+    # The result is canonical parity plus the new axis, which is a better
+    # place to be than the ad-hoc set it had drifted into.
     if backend not in _BACKEND_REGISTRY:
         raise ValueError(
             f"unknown backend {backend!r}; must be one of: "
             f"{sorted(_BACKEND_REGISTRY)}"
         )
+    model = (model or "").strip()
+    agent = agent_matrix.resolve_agent(agent)
+    if agent not in agent_matrix.known_agents():
+        raise ValueError(
+            f"unknown agent {agent!r}; must be one of: "
+            f"{agent_matrix.known_agents()}"
+        )
     reg = _BACKEND_REGISTRY[backend]
     default_timeout = reg["default_claude_timeout"]
+    # A native router has no round cap, so the timeout is its only spend
+    # bound — and its budget is a property of the agent, not of the provider
+    # whose name happens to qualify the model id. Taking Anthropic's 900s
+    # because the id starts with `anthropic/` was an accident of the join.
+    if agent_matrix.is_native_router(agent):
+        default_timeout = _DEFAULT_STAGE_TIMEOUT
+    # Every provider the ACTION knows, not just the ones this template can
+    # render a default for. The two are different questions and conflating
+    # them broke a real dispatch: `--backend` picks the install default and
+    # is bounded by `_STAGE_POLICY`, but the `provider` *input* exists so a
+    # single install can switch per dispatch — which is the whole point of
+    # the axis. Building the choice list from `_BACKEND_REGISTRY` left
+    # `openai` off it, so a `codex` + `openai` dispatch the CLI had just
+    # validated came back from GitHub as
+    # "Provided value 'openai' for input 'provider' not in the list of
+    # allowed values".
     provider_options = "\n".join(
-        f"          - {name}" for name in _BACKEND_REGISTRY
+        f"          - {name}" for name in agent_matrix.known_providers()
+    )
+    agent_options = "\n".join(
+        f"          - {name}" for name in agent_matrix.known_agents()
+    )
+    action_uses = f"{_OUTRIDER_TEMPLATE_REPO}@{_OUTRIDER_TEMPLATE_REF}"
+    secret_env_block = "\n".join(
+        f"          {name}: ${{{{ secrets.{name} }}}}"
+        for name in _workflow_secret_names()
     )
 
     if no_cron:
@@ -351,7 +507,8 @@ def _render_local_workflow(
             "  schedule:\n"
             "    - cron: '0 14 * * 1'   # Mondays 14:00 UTC; pick any cadence\n"
         )
-    cocoindex_steps = "" if no_cocoindex else _COCOINDEX_STEPS_BLOCK
+    # Forwarded to the action, which does the install agent-aware.
+    enable_cocoindex = "false" if no_cocoindex else "true"
     return f"""name: Outrider
 
 # Generated by `remyxai outrider setup-local` (no Remyx GitHub App).
@@ -363,22 +520,25 @@ on:
 {schedule_block}  workflow_dispatch:
     inputs:
       provider:
-        description: 'Which model provider to route Claude Code at. The action (v1.7.29+) picks the matching secret + base URL from its internal backend registry.'
+        description: 'Which model backend to route the coding agent at. A separate axis from agent, which picks the agent CLI itself. The action picks the matching secret, endpoint and auth style from its own registry.'
         type: choice
         required: false
         default: '{backend}'
         options:
 {provider_options}
+      agent:
+        description: 'Which coding-agent CLI runs the implementation. A separate axis from provider, which picks the model. Not every pair is valid — the action rejects an impossible one up front and names the agent that does serve your provider.'
+        type: choice
+        required: false
+        default: '{agent}'
+        options:
+{agent_options}
       model:
-        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.2, kimi-k3). Empty = provider default.'
+        description: 'Specific model name (e.g. claude-opus-4-8, glm-5.3, kimi-k3). Use the id your provider lists. Empty keeps this install default while the provider is unchanged, and lets the new vendor pick its own when you switch providers.'
         required: false
         default: ''
       base-url:
         description: 'Optional Anthropic-compatible endpoint (self-hosted model, litellm proxy, vLLM Anthropic shim, on-prem gateway). Overrides the per-provider default when set. Empty = provider default.'
-        required: false
-        default: ''
-      search-method:
-        description: 'Optional free-text method query. Runs an engine search and implements the top hit.'
         required: false
         default: ''
       pin-arxiv:
@@ -410,9 +570,9 @@ on:
         required: false
         default: 'false'
       claude-timeout:
-        description: 'Wall-clock seconds for the Claude Code agent calls. Threads through every phase (selection, deep-search, preflight, audit, implementation, self-review).'
+        description: 'Wall-clock seconds per agent phase for this run (empty = the install default below). Neither Codex nor R-CLI has a round cap, so this is their only spend bound.'
         required: false
-        default: '{default_timeout}'
+        default: ''
 
 jobs:
   recommend:
@@ -423,31 +583,40 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-{cocoindex_steps}      - uses: remyxai/outrider@v1
+      - uses: {action_uses}
         env:
-          # Every registered backend's secret is referenced. The action's
-          # Configure step (outrider v1.7.29+) reads only the one matching
-          # `provider`; the rest are ignored. Missing secrets evaluate to
-          # empty strings, and the Configure step fails clean with a specific
-          # ::error:: if the caller selects a provider whose secret isn't set.
-          REMYX_API_KEY: ${{{{ secrets.REMYX_API_KEY }}}}
-          ANTHROPIC_API_KEY: ${{{{ secrets.ANTHROPIC_API_KEY }}}}
-          ZAI_API_KEY: ${{{{ secrets.ZAI_API_KEY }}}}
-          MOONSHOT_API_KEY: ${{{{ secrets.MOONSHOT_API_KEY }}}}
+          # Every provider secret and every agent credential the action might
+          # read, generated from its published matrix so a provider added
+          # there reaches new installs without a CLI release. The Configure
+          # step reads only the ones its `agent` / `provider` select; the rest
+          # are ignored. A missing secret evaluates to an empty string and
+          # that step fails clean with a specific ::error:: naming the one it
+          # needed.
+{secret_env_block}
         with:
           interest-id: {interest_id}
+          # AST semantic search for the agent. The action installs it
+          # where the selected agent can actually reach it.
+          enable-cocoindex: '{enable_cocoindex}'
           # Minimum days between recommendation PRs. '0' lets every run open
           # a PR; raise (e.g. '7') to cap cadence.
           rate-limit-days: '0'
-          # Forwarded from workflow_dispatch inputs so manual `gh workflow
-          # run` dispatches can pin a paper, switch backends per-dispatch,
-          # extend the implementation timeout, etc.
+          # Forwarded from workflow_dispatch inputs so a manual `gh workflow
+          # run` (or `remyxai outrider trigger`) can pin a paper and switch
+          # either backend axis per-dispatch.
+          agent: ${{{{ inputs.agent }}}}
           provider: ${{{{ inputs.provider }}}}
-          model: ${{{{ inputs.model }}}}
+          # The baked model applies only while the run is on the baked
+          # provider: carrying a model id across a provider switch is the
+          # most common misconfiguration there is, and it fails as "that
+          # model may not exist" a minute into the run.
+          model: ${{{{ inputs.model || (inputs.provider == '{backend}' && '{model}' || '') }}}}
           model-base-url: ${{{{ inputs.base-url }}}}
-          search-method: ${{{{ inputs.search-method }}}}
           pin-arxiv: ${{{{ inputs.pin-arxiv }}}}
-          claude-timeout: ${{{{ inputs.claude-timeout }}}}
+          # Dispatch override first, install default second. `trigger
+          # --agent-timeout` sends this input; with no template declaring it,
+          # the flag was documented, accepted, and dropped on every install.
+          claude-timeout: ${{{{ inputs.claude-timeout || '{default_timeout}' }}}}
           # Forwarded so outrider-weekly-refine.yml can dispatch a refinement
           # run (mode + start-from-ref + lead-content + staged-synthesis).
           mode: ${{{{ inputs.mode }}}}
@@ -475,7 +644,22 @@ jobs:
 # See remyxai/outrider docs/customization.md §5 for the design rationale.
 
 _OUTRIDER_TEMPLATE_REPO = "remyxai/outrider"
-_OUTRIDER_TEMPLATE_REF = "v1"  # moves with each Outrider action release
+
+#: The action ref a generated workflow pins, and the ref templates are
+#: fetched from. ``v1`` is a moving tag that advances with each release, so
+#: customer installs pick up action changes without a CLI release.
+#:
+#: ``REMYXAI_OUTRIDER_ACTION_REF`` overrides it, which is how you exercise an
+#: action change that has not shipped yet — install a repo against the branch,
+#: dispatch it, and see the real thing run. Deliberately an env var rather
+#: than a flag: pointing customer installs at an unreleased ref is a testing
+#: move, not a supported configuration, and an env var cannot be reached for
+#: by accident the way a tab-completed flag can.
+#:
+#: Read at import so a single export covers a whole session.
+_OUTRIDER_TEMPLATE_REF = (
+    os.environ.get("REMYXAI_OUTRIDER_ACTION_REF", "").strip() or "v1"
+)
 _DRAFTER_TEMPLATE_PATH = ".github/workflows/outrider-daily.yml"
 _REFINER_TEMPLATE_PATH = ".github/workflows/outrider-weekly-refine.yml"
 
@@ -515,6 +699,22 @@ _GAP_ZAI_AUTH = '"Authorization": f"Bearer {os.environ[\'ZAI_API_KEY\']}",'
 _GAP_ENV_ANCHOR = "REPO: ${{ github.repository }}"
 
 
+def is_gateway_model(model: str) -> bool:
+    """True for a namespaced ``<vendor>/<model>`` id.
+
+    A gateway addresses models this way — OpenRouter's ``z-ai/glm-5.3``,
+    R-CLI's ``<provider>/<model>`` — and the namespace names the vendor
+    *behind* the gateway, not the endpoint the request goes to. So the id
+    cannot be resolved to a direct provider by inspection: ``z-ai/glm-5.3``
+    is served by OpenRouter, not by z.ai.
+
+    That distinction matters because the prefix heuristic below reads the
+    leading characters, and would have matched nothing for every namespaced
+    id, quietly handing them to the template default.
+    """
+    return "/" in (model or "")
+
+
 def infer_provider(model: str) -> Optional[str]:
     """Backend a model name belongs to, or ``None`` when nothing matches.
 
@@ -523,9 +723,13 @@ def infer_provider(model: str) -> Optional[str]:
     honest answer for an unrecognized name — the caller warns rather than
     silently assuming Anthropic, which is how a Kimi drafter ended up rendered
     against ANTHROPIC_API_KEY and dead on arrival.
+
+    A namespaced gateway id is ``None`` for a stronger reason than "no prefix
+    matched": there is no direct provider to infer at all. See
+    :func:`is_gateway_model`.
     """
     name = (model or "").strip().lower()
-    if not name:
+    if not name or is_gateway_model(name):
         return None
     for provider, cfg in _BACKEND_REGISTRY.items():
         if any(name.startswith(p) for p in cfg["model_prefixes"]):
@@ -721,7 +925,9 @@ def handle_outrider_setup_local(
     anthropic_key, skip_confirm, dry_run, no_cron=False, no_cocoindex=False,
     two_tier=False,
     drafter_model=None, refiner_model=None, refine_model=None, zai_key=None,
-    backend="anthropic",
+    backend=None,
+    agent="",
+    model="",
 ):
     """Self-provision Outrider with the user's own gh token (no Remyx App).
 
@@ -736,13 +942,17 @@ def handle_outrider_setup_local(
     ``--two-tier`` currently opts in — it's a strict superset of the
     legacy single-file install, and existing installs are unaffected.
 
-    ``backend`` selects which Anthropic-Messages-compat backend the
-    single-file setup routes at by default (anthropic / zai / moonshot).
-    Only the selected backend's secret is prompted + written; users who
-    want per-dispatch backend switching add other secrets manually via
-    ``gh secret set``. ``backend`` is scoped to the single-file path —
-    two-tier setups route per-stage via ``--drafter-model`` etc. and
-    reject a non-anthropic ``--backend`` as ambiguous.
+    ``backend`` selects which model backend the single-file setup routes
+    at by default; the supported set is
+    :data:`TWO_TIER_BACKEND_CHOICES`, bounded by what the template can
+    render rather than by every provider the action knows. ``agent``
+    selects the coding-agent CLI on the other axis. Only the selected
+    backend's secret is prompted + written; users who want per-dispatch
+    switching add the other secrets with
+    ``remyxai outrider set-provider-secret``. ``backend`` is scoped to
+    the single-file path — two-tier setups route per-stage via
+    ``--drafter-model`` etc. and reject a non-anthropic ``--backend`` as
+    ambiguous.
     """
     import os
 
@@ -751,12 +961,51 @@ def handle_outrider_setup_local(
             "--interest and --auto-interest are mutually exclusive."
         )
 
+    # An unset `--backend` follows the *agent*, not a fixed vendor. It used to
+    # default to `anthropic` whatever the agent was, so `--agent codex` on its
+    # own was rejected — picking an agent forced you to also know which
+    # provider pairs with it, which is exactly the kind of rule nobody should
+    # have to carry. Derived before validation so both install paths see a
+    # concrete value.
+    # Remember whether the caller actually passed --backend before deriving
+    # one, so a later error can blame the right flag.
+    backend_given = bool(backend)
+    if not backend:
+        backend = (
+            agent_matrix.home_provider(agent) or _TEMPLATE_DEFAULT_PROVIDER
+        )
+    # A native router composes `<provider>/<model>` and refuses to run without
+    # a model — there is no "the provider's default" for it, because the
+    # provider is only half of the id. Without this the install wrote a
+    # workflow that looked healthy and died in the action's first step on
+    # every run: "agent=backboard with provider=anthropic also needs a model".
+    if agent_matrix.is_native_router(agent) and not (model or "").strip():
+        raise click.UsageError(
+            f"--agent {agent_matrix.resolve_agent(agent)} needs --model: it "
+            f"addresses models as <provider>/<model> and has no default. Pass "
+            f"the bare id for --backend {backend} (the action composes the "
+            f"qualified form), e.g. --backend openrouter --model z-ai/glm-5.3."
+        )
+
     if backend not in _BACKEND_REGISTRY:
         raise click.UsageError(
             f"unknown --backend {backend!r}; must be one of: "
             f"{', '.join(sorted(_BACKEND_REGISTRY))}"
         )
-    if two_tier and backend != "anthropic":
+    if two_tier and agent_matrix.resolve_agent(agent) != agent_matrix.DEFAULT_AGENT:
+        # Say what is actually wrong. The two-tier install rewrites an
+        # Anthropic-Messages workflow template per stage, so it is
+        # Claude-Code-only by construction. Before this check, `--two-tier
+        # --agent codex` derived `openai` as the backend and then fell into
+        # the `--backend` error below — blaming a flag the caller never passed.
+        raise click.UsageError(
+            f"--two-tier runs Claude Code only (each stage rewrites an "
+            f"Anthropic-Messages template in place), so --agent "
+            f"{agent_matrix.resolve_agent(agent)} cannot be used with it. "
+            f"Drop --two-tier for a single-file install on that agent, or "
+            f"drop --agent."
+        )
+    if two_tier and backend_given and backend != "anthropic":
         raise click.UsageError(
             "--backend is scoped to the single-file setup; --two-tier "
             "ignores it. Use --drafter-model / --refiner-model / "
@@ -778,10 +1027,30 @@ def handle_outrider_setup_local(
     unknown_models = _unknown_stage_models(
         drafter_model, refiner_model, refine_model,
     )
-    if unknown_models:
+    # Split by how sure we are. A namespaced id is *certainly* unroutable
+    # here, so it fails; a merely unrecognized one might be fine, so it
+    # warns. Same rule the agent/provider check uses: only a durable fact
+    # gets to hard-fail.
+    gateway_models = [m for m in unknown_models if is_gateway_model(m)]
+    unrecognized = [m for m in unknown_models if not is_gateway_model(m)]
+    if gateway_models:
+        raise click.UsageError(
+            f"a two-tier stage cannot use a gateway model id: "
+            f"{', '.join(gateway_models)}. Each stage rewrites an "
+            f"Anthropic-Messages workflow in place and routes at one "
+            f"vendor's endpoint, so a `<vendor>/<model>` id — OpenRouter's "
+            f"`z-ai/glm-5.3`, R-CLI's `<provider>/<model>` — has no endpoint "
+            f"to resolve to. Name a direct provider's model instead ("
+            + ", ".join(
+                f"{c['default_model']}" for c in _BACKEND_REGISTRY.values()
+                if c.get("default_model")
+            )
+            + "), or install single-file and set `provider` per dispatch."
+        )
+    if unrecognized:
         click.secho(
             f"⚠ can't tell which backend these models belong to: "
-            f"{', '.join(unknown_models)}. Treating them as "
+            f"{', '.join(unrecognized)}. Treating them as "
             f"{_TEMPLATE_DEFAULT_PROVIDER} — if that's wrong the stage will "
             f"fail auth on its first run. Known prefixes: "
             + "; ".join(
@@ -851,9 +1120,30 @@ def handle_outrider_setup_local(
         backend_secret_env = next(iter(stage_secrets))
         backend_secret_value = stage_secrets[backend_secret_env]
     else:
+        # Reject an impossible (agent, backend) pair before writing anything.
+        # `--agent codex --backend anthropic` used to install cleanly, write
+        # ANTHROPIC_API_KEY — the wrong token for a Codex run — and leave a
+        # workflow whose own defaults could never succeed, so every scheduled
+        # run failed on a config the CLI had just told the user was fine.
+        for problem in agent_matrix.check_pair(agent, backend, model):
+            if problem.is_error:
+                raise click.UsageError(
+                    problem.message.replace("--agent", "--agent")
+                    + f" (installing agent={agent} with --backend {backend})"
+                )
+            click.secho(f"⚠ {problem.message}", fg="yellow")
+
         reg = _BACKEND_REGISTRY[backend]
-        backend_secret_env = reg["secret_env"]
-        display = reg["display_name"]
+        # The credential for *this pair*, which is not always the provider's:
+        # a native router uses its own key for every provider it reaches.
+        backend_secret_env = (
+            agent_matrix.secret_env(agent, backend) or reg["secret_env"]
+        )
+        display = (
+            agent_matrix.agent_display_name(agent)
+            if agent_matrix.is_native_router(agent)
+            else reg["display_name"]
+        )
         legacy_flag_value = {"anthropic": anthropic_key, "zai": zai_key}.get(backend)
         backend_secret_value = (
             legacy_flag_value
@@ -867,7 +1157,8 @@ def handle_outrider_setup_local(
             )
         if backend_secret_value is not None and not backend_secret_value.strip():
             raise click.ClickException(
-                f"{backend_secret_env} is required for --backend {backend}."
+                f"{backend_secret_env} is required for agent={agent} with "
+                f"--backend {backend}."
             )
         # Populate historical variables so downstream references remain
         # consistent (they're only used in the two-tier path today, so this
@@ -899,8 +1190,19 @@ def handle_outrider_setup_local(
         )
     else:
         secrets_line = f"REMYX_API_KEY, {backend_secret_env}"
-        if backend != "anthropic":
-            click.echo(f"  - Backend:   {backend} ({_BACKEND_REGISTRY[backend]['display_name']})")
+        # Always name the agent, and name the provider whenever it is not
+        # the default. The plan is the last thing a user reads before
+        # something is written to their repo, and the agent is the axis they
+        # most likely just set — showing only the provider made the headline
+        # choice invisible on exactly the install that changed it.
+        click.echo(
+            f"  - Agent:     {agent_matrix.resolve_agent(agent)} "
+            f"({agent_matrix.agent_display_name(agent)})"
+        )
+        # Always shown once an agent is named. Hiding it for the default
+        # provider made a Backboard install's most consequential line
+        # invisible — it is the provider half of the model id R-CLI resolves.
+        click.echo(f"  - Backend:   {backend} ({_BACKEND_REGISTRY[backend]['display_name']})")
     click.echo(f"  - Secrets:   {secrets_line}")
     click.echo("  - PR auth:   enable the repo 'Actions can create PRs' setting "
                "(PRs by github-actions[bot])")
@@ -924,6 +1226,7 @@ def handle_outrider_setup_local(
             click.echo("--- rendered outrider.yml (workflow_dispatch only) ---")
             click.echo(_render_local_workflow(
                 "<interest-id>", no_cron=True, no_cocoindex=no_cocoindex,
+                agent=agent, model=model,
             ))
             click.echo("\n--- rendered outrider-daily.yml (drafter) ---")
             click.echo(_render_drafter_workflow("<interest-id>", model=drafter_model))
@@ -935,7 +1238,7 @@ def handle_outrider_setup_local(
             click.echo("--- rendered workflow ---")
             click.echo(_render_local_workflow(
                 "<interest-id>", no_cron=no_cron, no_cocoindex=no_cocoindex,
-                backend=backend,
+                backend=backend, agent=agent, model=model,
             ))
         click.secho("dry-run: no changes made.", fg="yellow")
         return
@@ -984,6 +1287,8 @@ def handle_outrider_setup_local(
             no_cron=(no_cron or two_tier),
             no_cocoindex=no_cocoindex,
             backend=backend,
+            agent=agent,
+            model=model,
         )
         _gh_put_file(resolved_repo, branch_name, WORKFLOW_PATH, workflow,
                      "Install Outrider (self-provisioned via remyxai CLI)")
