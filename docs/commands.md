@@ -14,7 +14,7 @@ Run any command with `--help` for full flag listings and examples — that's the
 |---|---|
 | `remyxai outrider init` | Install Outrider on a repo via the Remyx App — `--agent` is accepted and verified against the provisioned workflow (takes effect once the engine supports the agent axis) |
 | `remyxai outrider setup-local` | Install Outrider via your own `gh` (no Remyx App) — `--agent` picks the coding agent, `--backend` the model provider (defaults to the agent's own vendor), `--model` the install's default model |
-| `remyxai outrider trigger` | Dispatch a one-shot run — selection (`--search-method` / `--pin-arxiv`), routing (`--agent` / `--provider` / `--model` / `--agent-timeout`), refinement (`--start-from-ref` / `--lead-content-file` / `--staged-synthesis` / `--mode` / `--publish` / `--fidelity-policy` / `--test-integration-policy`) |
+| `remyxai outrider trigger` | Dispatch a one-shot run — selection (`--search-method` / `--pin-arxiv` / `--brief`), routing (`--agent` / `--provider` / `--model` / `--agent-timeout`), refinement (`--start-from-ref` / `--lead-content-file` / `--staged-synthesis` / `--mode` / `--publish` / `--fidelity-policy` / `--test-integration-policy`) |
 | `remyxai outrider set-provider-secret` | Set a per-provider API-key secret on a repo, safely — any provider the action knows (`anthropic` / `openai` / `zai` / `moonshot` / `openrouter`) |
 
 See also: [method-targeted-runs.md](method-targeted-runs.md) for `outrider trigger` in depth, [install-paths.md](install-paths.md) for `init` vs `setup-local` and bulk-install.

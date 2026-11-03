@@ -1083,6 +1083,15 @@ def outrider_setup_local(
                   "isn't in the ranker's pool, so any published arxiv paper "
                   "works — not just those the interest surfaces."
               ))
+@click.option("--brief", "brief", default=None,
+              help=(
+                  "A design brief the agent implements directly — inline "
+                  "text, or @path to read it from a file (an issue body, a "
+                  "hand-written spec). No arXiv anchor: the brief IS the "
+                  "spec. Shorthand for `--mode brief` with the brief as the "
+                  "run's lead content. Mutually exclusive with --pin-arxiv, "
+                  "--search-method, --lead-content and --lead-content-file."
+              ))
 @click.option("--interest", "-i", "interest_id", default=None,
               help="Override the ResearchInterest UUID for this run.")
 @click.option("--ref", "ref", default=None,
@@ -1151,9 +1160,9 @@ def outrider_setup_local(
 @click.option("--mode", "mode", default=None,
               help=(
                   "Run mode. 'recommend' (the workflow default) runs the full "
-                  "scout→implement flow; 'brief' produces the write-up without "
-                  "implementing. Whatever the installed action version "
-                  "supports."
+                  "scout→implement flow; 'brief' drafts a PR from the lead "
+                  "content alone, with no arXiv anchor (--brief sets this for "
+                  "you). Whatever the installed action version supports."
               ))
 @click.option("--start-from-ref", "start_from_ref", default=None,
               help=(
@@ -1199,7 +1208,7 @@ def outrider_setup_local(
                   "one pending run). Use when firing several dispatches at one "
                   "repo."
               ))
-def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
+def outrider_trigger(repo, search_method, pin_arxiv, brief, interest_id, ref,
                      agent, agent_timeout, provider, model, base_url, mode,
                      publish, start_from_ref, lead_content,
                      lead_content_file, staged_synthesis,
@@ -1208,7 +1217,7 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
     """
     Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
-    Three modes of specificity, in ascending order of override:
+    Four ways to say what to implement, in ascending order of override:
 
     \b
     - default (no pin): Remyx ranks candidates from the interest-scoped
@@ -1218,6 +1227,8 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
       on the user-specified query; the top hit gets implemented.
     - --pin-arxiv: exact arxiv paper; bypasses the pool entirely and
       implements THIS specific paper against the target branch.
+    - --brief: no paper at all; the design brief you supply (inline or
+      @file) is the spec, and the run drafts a PR from it.
 
     On top of paper selection, the refinement inputs drive a run that builds
     on existing work: --start-from-ref pins the branch to build ON,
@@ -1239,6 +1250,11 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
       # Exploratory: search for a method-family and implement the top hit
       remyxai outrider trigger --repo owner/name \\
         --search-method "riemannian preconditioning LoRA optimizer"
+
+      # From a design brief you wrote — inline, or @path to a file
+      remyxai outrider trigger --repo owner/name \\
+        --brief "add exponential backoff to the HTTP client"
+      remyxai outrider trigger --repo owner/name --brief @design.md
 
       # Route at z.ai's GLM for this dispatch (Anthropic is the
       # workflow's default; this overrides for one run)
@@ -1272,6 +1288,7 @@ def outrider_trigger(repo, search_method, pin_arxiv, interest_id, ref,
         repo=repo,
         search_method=search_method,
         pin_arxiv=pin_arxiv,
+        brief=brief,
         interest_id=interest_id,
         ref=ref,
         agent=agent,

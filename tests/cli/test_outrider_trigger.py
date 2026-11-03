@@ -755,7 +755,7 @@ def test_trigger_warns_about_dropped_inputs(monkeypatch, capsys):
     monkeypatch.setattr(outrider_actions, "_gh_latest_run_url",
                         lambda r, sleep=None: None)
     monkeypatch.setattr(outrider_actions, "_dispatch_with_input_fallback",
-                        lambda r, b, i: (True, "", ["lead-content"]))
+                        lambda r, b, i, required=(): (True, "", ["lead-content"]))
     outrider_actions.handle_outrider_trigger(
         repo="owner/name", search_method=None, pin_arxiv=None,
         interest_id=None, ref=None, lead_content="ctx",
@@ -1208,3 +1208,230 @@ def test_an_unreadable_install_warns_rather_than_guessing(monkeypatch):
     ])
     assert result.exit_code == 0, result.output
     assert "could not read" in result.output
+
+
+# ─── --brief: the paper-less entry point ─────────────────────────────────────
+#
+# `--brief "..."` / `--brief @design.md` is sugar over two inputs the action
+# has had since v1.7.48 — `mode: brief` + `lead-content` — so the CLI's job
+# is to set both, read the @file form, refuse the combinations that make no
+# sense, and never let the undeclared-input fallback turn a brief into a
+# paper run.
+
+
+def test_brief_inline_sets_mode_and_lead_content(monkeypatch, capsys):
+    captured = _dispatch_capture(monkeypatch)
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv=None,
+        interest_id=None, ref=None,
+        brief="add exponential backoff to the HTTP client",
+    )
+    inputs = captured["inputs"]
+    assert inputs["mode"] == "brief"
+    assert inputs["lead-content"] == "add exponential backoff to the HTTP client"
+    assert inputs["pin-arxiv"] == "" and inputs["search-method"] == ""
+    out = capsys.readouterr().out
+    assert "mode:           brief" in out
+    assert "brief:" in out and "(the spec)" in out
+
+
+def test_brief_at_file_reads_the_file(monkeypatch, tmp_path):
+    captured = _dispatch_capture(monkeypatch)
+    spec = tmp_path / "design.md"
+    spec.write_text("# Design\n\nRetry with jitter.\n")
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv=None,
+        interest_id=None, ref=None, brief=f"@{spec}",
+    )
+    assert captured["inputs"]["mode"] == "brief"
+    assert captured["inputs"]["lead-content"] == "# Design\n\nRetry with jitter.\n"
+
+
+def test_brief_at_file_must_exist(tmp_path):
+    with pytest.raises(click.UsageError, match="file not found"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", search_method=None, pin_arxiv=None,
+            interest_id=None, ref=None, brief=f"@{tmp_path / 'missing.md'}",
+        )
+
+
+@pytest.mark.parametrize("brief", ["", "   \n\t"])
+def test_brief_must_not_be_empty(brief, tmp_path):
+    with pytest.raises(click.UsageError, match="empty"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", search_method=None, pin_arxiv=None,
+            interest_id=None, ref=None, brief=brief,
+        )
+
+
+def test_brief_at_empty_file_is_rejected(tmp_path):
+    spec = tmp_path / "empty.md"
+    spec.write_text("\n\n")
+    with pytest.raises(click.UsageError, match="empty"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", search_method=None, pin_arxiv=None,
+            interest_id=None, ref=None, brief=f"@{spec}",
+        )
+
+
+def test_brief_respects_the_dispatch_payload_cap():
+    with pytest.raises(click.UsageError, match="64KB"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", search_method=None, pin_arxiv=None,
+            interest_id=None, ref=None,
+            brief="x" * (outrider_actions.LEAD_CONTENT_MAX_CHARS + 1),
+        )
+
+
+@pytest.mark.parametrize("extra", [
+    {"pin_arxiv": "2402.02347v3"},
+    {"search_method": "LoRA optimizer"},
+])
+def test_brief_is_paper_less(extra):
+    with pytest.raises(click.UsageError, match="paper-less"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", interest_id=None, ref=None, brief="do x",
+            **{"search_method": None, "pin_arxiv": None, **extra},
+        )
+
+
+def test_brief_and_lead_content_do_not_mix(tmp_path):
+    with pytest.raises(click.UsageError, match="already supplies"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", search_method=None, pin_arxiv=None,
+            interest_id=None, ref=None, brief="do x", lead_content="ctx",
+        )
+
+
+def test_brief_refuses_a_conflicting_mode():
+    with pytest.raises(click.UsageError, match="mode 'brief'"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", search_method=None, pin_arxiv=None,
+            interest_id=None, ref=None, brief="do x", mode="recommend",
+        )
+
+
+def test_brief_accepts_an_explicit_mode_brief(monkeypatch):
+    captured = _dispatch_capture(monkeypatch)
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv=None,
+        interest_id=None, ref=None, brief="do x", mode="brief",
+    )
+    assert captured["inputs"]["mode"] == "brief"
+
+
+def test_brief_can_build_on_a_branch(monkeypatch):
+    """A brief plus --start-from-ref is a legitimate shape: implement the
+    brief on top of an existing branch."""
+    captured = _dispatch_capture(monkeypatch)
+    outrider_actions.handle_outrider_trigger(
+        repo="owner/name", search_method=None, pin_arxiv=None,
+        interest_id=None, ref=None, brief="do x",
+        start_from_ref="outrider/draft-1", publish="branch",
+    )
+    assert captured["inputs"]["start-from-ref"] == "outrider/draft-1"
+    assert captured["inputs"]["publish"] == "branch"
+
+
+def test_fallback_never_turns_a_brief_into_a_paper_run():
+    """An install whose workflow predates `mode` / `lead-content` 422s on
+    them. The generic fallback would drop both and retry — dispatching a
+    recommend run the user never asked for. With them marked required, the
+    dispatch refuses instead."""
+    attempts = []
+
+    def fake_dispatch(repo, branch, inputs):
+        attempts.append(dict(inputs))
+        return (False, 'HTTP 422: Unexpected inputs provided: '
+                       '["lead-content", "mode"]')
+
+    with patch.object(outrider_actions, "_gh_dispatch_outrider",
+                      side_effect=fake_dispatch):
+        ok, stderr, dropped = outrider_actions._dispatch_with_input_fallback(
+            "owner/name", "main",
+            {"mode": "brief", "lead-content": "the spec"},
+            required=("mode", "lead-content"),
+        )
+    assert ok is False
+    assert len(attempts) == 1, "must not retry without the brief"
+    assert "lead-content, mode" in stderr and "--force" in stderr
+    assert dropped == ["lead-content", "mode"]
+
+
+def test_fallback_still_retries_when_only_optional_inputs_are_undeclared():
+    attempts = []
+
+    def fake_dispatch(repo, branch, inputs):
+        attempts.append(dict(inputs))
+        if "publish" in inputs:
+            return (False, 'HTTP 422: Unexpected inputs provided: ["publish"]')
+        return (True, "")
+
+    with patch.object(outrider_actions, "_gh_dispatch_outrider",
+                      side_effect=fake_dispatch):
+        ok, stderr, dropped = outrider_actions._dispatch_with_input_fallback(
+            "owner/name", "main",
+            {"mode": "brief", "lead-content": "the spec", "publish": "branch"},
+            required=("mode", "lead-content"),
+        )
+    assert ok is True and dropped == ["publish"]
+    assert attempts[1] == {"mode": "brief", "lead-content": "the spec"}
+
+
+def test_brief_dispatch_surfaces_the_refusal(monkeypatch):
+    monkeypatch.setattr(outrider_actions, "_outrider_workflow_exists",
+                        lambda repo: True)
+    monkeypatch.setattr(outrider_actions, "_gh_default_branch",
+                        lambda repo: "main")
+    monkeypatch.setattr(
+        outrider_actions, "_gh_dispatch_outrider",
+        lambda r, b, i: (False, 'HTTP 422: Unexpected inputs provided: ["mode"]'),
+    )
+    with pytest.raises(click.ClickException, match="doesn't declare mode"):
+        outrider_actions.handle_outrider_trigger(
+            repo="owner/name", search_method=None, pin_arxiv=None,
+            interest_id=None, ref=None, brief="do x",
+        )
+
+
+def test_cli_brief_flag_reaches_the_dispatch(monkeypatch):
+    captured = _dispatch_capture(monkeypatch)
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--brief", "add exponential backoff to the HTTP client",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["mode"] == "brief"
+    assert captured["inputs"]["lead-content"] == "add exponential backoff to the HTTP client"
+    assert "brief:" in result.output
+
+
+def test_cli_brief_at_file(monkeypatch, tmp_path):
+    captured = _dispatch_capture(monkeypatch)
+    spec = tmp_path / "design.md"
+    spec.write_text("# Design")
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name", "--brief", f"@{spec}",
+    ])
+    assert result.exit_code == 0, result.output
+    assert captured["inputs"]["lead-content"] == "# Design"
+
+
+def test_cli_brief_with_pin_arxiv_is_a_usage_error():
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "outrider", "trigger", "--repo", "owner/name",
+        "--brief", "do x", "--pin-arxiv", "2410.20305v2",
+    ])
+    assert result.exit_code != 0
+    assert "paper-less" in result.output
+
+
+def test_cli_help_documents_brief():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["outrider", "trigger", "--help"])
+    assert result.exit_code == 0
+    assert "--brief" in result.output
+    assert "@path" in result.output or "@design.md" in result.output

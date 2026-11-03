@@ -1381,7 +1381,7 @@ def _retry_is_safe(inputs, dropped) -> Optional[str]:
     return problem.message if problem else None
 
 
-def _dispatch_with_input_fallback(repo, branch, inputs):
+def _dispatch_with_input_fallback(repo, branch, inputs, required=()):
     """Dispatch, dropping inputs the installed workflow doesn't declare.
 
     GitHub rejects a dispatch naming an undeclared input with
@@ -1389,6 +1389,11 @@ def _dispatch_with_input_fallback(repo, branch, inputs):
     installed before an input existed would dead-end there, so — mirroring the
     engine's own trigger endpoint — drop exactly the inputs GitHub named and
     retry once. The workflow's baked defaults apply for the dropped ones.
+
+    ``required`` names inputs the caller cannot do without: if GitHub rejects
+    one of those, there is no retry. A brief-mode dispatch minus ``mode`` or
+    ``lead-content`` is a paper run that spends real tokens on something the
+    user never asked for, and nothing downstream would say so.
 
     Returns ``(ok, stderr, dropped)``.
     """
@@ -1401,6 +1406,14 @@ def _dispatch_with_input_fallback(repo, branch, inputs):
     }
     if not undeclared:
         return ok, stderr, []
+    essential = sorted(undeclared & set(required))
+    if essential:
+        return False, (
+            f"this install's workflow doesn't declare "
+            f"{', '.join(essential)}, which this dispatch needs — not "
+            f"retrying without it. Re-provision the install first:\n"
+            f"    remyxai outrider init --repo {repo} --force"
+        ), sorted(undeclared)
     pruned = {k: v for k, v in inputs.items() if k not in undeclared}
     unsafe = _retry_is_safe(pruned, undeclared)
     if unsafe:
@@ -1501,6 +1514,37 @@ def _gh_latest_run_url(repo, sleep=time.sleep):
     return None
 
 
+def _resolve_brief(brief):
+    """The design brief for a ``--brief`` run: inline text, or ``@path``.
+
+    The ``@`` form reads the file so an issue body or a spec that lives on
+    disk needs no shell quoting. Whitespace-only is an error either way —
+    the action would skip the run (``skipped_brief_missing_lead_content``)
+    after a dispatch round-trip, which is late to find out.
+    """
+    if brief is None:
+        return None
+    text = brief
+    if brief.startswith("@"):
+        path = Path(brief[1:])
+        if not path.is_file():
+            raise click.UsageError(f"--brief file not found: {path}")
+        text = path.read_text()
+    if not text.strip():
+        raise click.UsageError(
+            "--brief is empty. Give the agent something to implement — "
+            "inline text, or @path to a file with the brief."
+        )
+    if len(text) > LEAD_CONTENT_MAX_CHARS:
+        raise click.UsageError(
+            f"the brief is {len(text)} chars; GitHub caps a workflow_dispatch "
+            f"payload at ~64KB, so keep it under {LEAD_CONTENT_MAX_CHARS}. "
+            f"Trim it, or commit it to the branch and reference it from a "
+            f"shorter brief."
+        )
+    return text
+
+
 def _resolve_lead_content(lead_content, lead_content_file):
     """Inline markdown for the run's leading context, from a flag or a file."""
     if lead_content and lead_content_file:
@@ -1532,7 +1576,7 @@ def handle_outrider_trigger(
     publish=None, start_from_ref=None, lead_content=None,
     lead_content_file=None, staged_synthesis=False,
     test_integration_policy=None, fidelity_policy=None, wait_for_slot=False,
-    claude_timeout=None,
+    claude_timeout=None, brief=None,
 ):
     """Dispatch a one-shot Outrider run on a repo via workflow_dispatch.
 
@@ -1557,12 +1601,35 @@ def handle_outrider_trigger(
     inputs the two-tier refiner uses, so building on an existing branch (a
     stalled third-party PR, yesterday's drafter output) or running a
     brief-mode pass no longer means dropping to raw `gh workflow run`.
+
+    ``brief`` is the paper-less entry point: the text (or ``@path``) becomes
+    the run's lead content and ``mode`` is forced to ``brief``. It is sugar
+    over those two inputs — the action has had ``mode: brief`` + ``lead-content``
+    since v1.7.48 — so an install whose workflow declares neither cannot run it,
+    and the dispatch refuses rather than silently running a paper pass.
     """
     # Inputs validation
     if search_method and pin_arxiv:
         raise click.UsageError(
             "--search-method and --pin-arxiv are mutually exclusive."
         )
+    brief_text = _resolve_brief(brief)
+    if brief_text is not None:
+        if search_method or pin_arxiv:
+            raise click.UsageError(
+                "--brief is paper-less; it cannot be combined with "
+                "--pin-arxiv or --search-method."
+            )
+        if lead_content or lead_content_file:
+            raise click.UsageError(
+                "--brief already supplies the run's lead content; drop "
+                "--lead-content / --lead-content-file."
+            )
+        if mode and mode != "brief":
+            raise click.UsageError(
+                f"--brief runs in mode 'brief', not {mode!r}. Drop --mode."
+            )
+        mode = "brief"
     # `--claude-timeout` is the old name for `--agent-timeout`. Click maps
     # both spellings onto one parameter, so this only matters for callers
     # invoking the handler directly (the engine path, and the tests written
@@ -1599,7 +1666,8 @@ def handle_outrider_trigger(
             # correct for a codex install.
             continue
         click.secho(f"⚠ {problem.message}", fg="yellow")
-    lead = _resolve_lead_content(lead_content, lead_content_file)
+    lead = (brief_text if brief_text is not None
+            else _resolve_lead_content(lead_content, lead_content_file))
 
     # Repo resolution
     resolved_repo = _normalize_repo(repo) if repo else _detect_github_repo_from_cwd()
@@ -1734,7 +1802,9 @@ def handle_outrider_trigger(
         click.echo(f"  mode:           {mode}")
     if start_from_ref:
         click.echo(f"  start-from-ref: {start_from_ref}")
-    if lead:
+    if brief_text is not None:
+        click.echo(f"  brief:          {len(brief_text)} chars (the spec)")
+    elif lead:
         click.echo(f"  lead-content:   {len(lead)} chars")
     if staged_synthesis:
         click.echo("  staged-synthesis: true")
@@ -1744,7 +1814,8 @@ def handle_outrider_trigger(
         click.echo(f"  fidelity-policy: {fidelity_policy}")
 
     ok, stderr, dropped = _dispatch_with_input_fallback(
-        resolved_repo, branch, inputs
+        resolved_repo, branch, inputs,
+        required=("mode", "lead-content") if brief_text is not None else (),
     )
     if not ok:
         hint = ""

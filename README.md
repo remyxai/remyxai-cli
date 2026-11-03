@@ -120,7 +120,7 @@ remyxai outrider init --repo your-org/your-repo --interest <uuid> \
   --refiner-provider moonshot --refiner-model kimi-k3 --force
 ```
 
-Trigger a run — three modes of specificity:
+Trigger a run — four ways to say what to implement:
 
 ```bash
 # 1. default — Remyx picks from the ranked pool; Outrider's audit augments via agentic search
@@ -132,7 +132,19 @@ remyxai outrider trigger --repo your-org/your-repo \
 
 # 3. --pin-arxiv — exact paper, bypasses selection entirely
 remyxai outrider trigger --repo your-org/your-repo --pin-arxiv 2402.02347v3
+
+# 4. --brief — no paper at all: the design brief you supply is the spec
+remyxai outrider trigger --repo your-org/your-repo \
+  --brief "add exponential backoff to the HTTP client"
+remyxai outrider trigger --repo your-org/your-repo --brief @design.md
 ```
+
+`--brief` is shorthand for `--mode brief` with the brief as the run's lead
+content; `@path` reads it from a file. The run drafts a PR from the brief
+alone (status `pr_opened_brief`), skipping ranking, selection and the
+refinement chain. An install whose workflow predates the `mode` and
+`lead-content` inputs is refused rather than silently run as a paper pass —
+re-provision it with `remyxai outrider init --force`.
 
 Refinement runs build on work that already exists — yesterday's drafter
 branch, or a third party's stalled PR branch — with a written gap analysis as

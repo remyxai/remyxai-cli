@@ -8,11 +8,12 @@ tags: [outrider, cli, search-method, pin-arxiv, workflow_dispatch]
 
 Once [Outrider](https://github.com/remyxai/outrider) is installed on a repo, you can dispatch a one-shot run targeting a specific paper or method — useful for kicking off an ad-hoc PR/Issue without waiting for the next scheduled run.
 
-Three modes of specificity, in ascending order of override:
+Four ways to say what to implement, in ascending order of override:
 
 1. **Default (no pin)** — Remyx ranks candidates from the interest-scoped pool + Outrider's audit augments via agentic refine-queries; the coding agent picks the best implementation from the ranked pool.
 2. **`--search-method`** — overrides the ranked pool with an engine search on your query; implements the top hit.
 3. **`--pin-arxiv`** — implements the exact arxiv paper; bypasses ranking entirely.
+4. **`--brief`** — no paper at all: the design brief you supply (inline, or `@path` to a file) is the spec. Shorthand for `--mode brief` with the brief as the run's lead content; see [Brief runs](#brief-runs) below.
 
 The flow is two steps: **discover** what you want implemented, then **trigger** the action.
 
@@ -274,3 +275,27 @@ remyxai outrider trigger --repo owner/name --pin-arxiv 2402.02347v3 \
 ```
 
 `--pin-arxiv` guarantees reproducibility across retries — the second attempt implements the same paper the first one targeted, so the comparison isolates the provider/backend variable.
+
+
+## Brief runs
+
+When the "why" comes from you rather than a paper — an issue body, a hand-written
+spec, a notebook — skip discovery and hand the agent the brief directly:
+
+```bash
+remyxai outrider trigger --repo owner/name --brief "add exponential backoff to the HTTP client"
+remyxai outrider trigger --repo owner/name --brief @design.md
+```
+
+The run drafts a PR from the brief alone (status `pr_opened_brief`). It keeps the
+license scan a paper run gets, but there is no ranking, selection or paper
+preflight, and no refinement chain (fidelity audit, convention pass, test gate). `--brief` cannot be
+combined with `--pin-arxiv`, `--search-method`, `--lead-content` or
+`--lead-content-file`; it can be combined with `--start-from-ref` to implement the
+brief on top of an existing branch, and with `--publish branch` to review the
+output before anything is opened.
+
+The installed workflow must declare the `mode` and `lead-content` inputs
+(workflows this CLI has generated since 0.4.5 do). An older install is refused rather than
+silently dispatched as a paper run; re-provision it with
+`remyxai outrider init --repo owner/name --force`.
